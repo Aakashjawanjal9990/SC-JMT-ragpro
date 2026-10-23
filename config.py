@@ -56,10 +56,24 @@ class PipelineConfig:
 
     @classmethod
     def ensure_directories(cls):
-        """Ensures all necessary persistent runtime directories exist."""
-        cls.CHUNKS_DIR.mkdir(parents=True, exist_ok=True)
-        cls.DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
-        cls.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        """Ensures all necessary persistent runtime directories exist, falling back to /tmp if permissions are restricted."""
+        try:
+            cls.CHUNKS_DIR.mkdir(parents=True, exist_ok=True)
+            cls.DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+            cls.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        except (PermissionError, OSError):
+            import tempfile
+            tmp_base = Path(tempfile.gettempdir()) / "scj_output"
+            cls.OUTPUT_DIR = tmp_base
+            cls.CHUNKS_DIR = tmp_base / "chunks"
+            cls.DOCUMENTS_DIR = tmp_base / "documents"
+            cls.REPORTS_DIR = Path(tempfile.gettempdir()) / "scj_reports"
+            try:
+                cls.CHUNKS_DIR.mkdir(parents=True, exist_ok=True)
+                cls.DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+                cls.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
 
     @classmethod
     def get_masked_llama_key(cls) -> str:
@@ -73,5 +87,8 @@ class PipelineConfig:
 
 # Global config instance
 config = PipelineConfig()
-config.ensure_directories()
+try:
+    config.ensure_directories()
+except Exception:
+    pass
 

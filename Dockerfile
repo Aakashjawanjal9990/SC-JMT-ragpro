@@ -26,6 +26,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application source code
 COPY --chown=appuser:appuser . .
 
+# Ensure runtime directories exist and are owned by appuser
+RUN mkdir -p /app/output/chunks /app/output/documents /app/reports && chown -R appuser:appuser /app
+
 # Switch to non-root user
 USER appuser
 
