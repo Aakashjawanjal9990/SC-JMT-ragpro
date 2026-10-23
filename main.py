@@ -16,6 +16,7 @@ from cleaner_chunker import PageProcessor
 from extractor import LlamaParseExtractor, DEFAULT_LLAMA_CLOUD_API_KEY
 from pipeline import IngestionPipeline
 from sample_generator import generate_sample_judgment_pdf
+from db_loader import DatabaseLoader, DEFAULT_SQLITE_URL
 
 DEFAULT_1950_DIR = "data/sample_pdfs/year=1950/english"
 
@@ -183,8 +184,15 @@ def main():
     batch_parser.add_argument("--pattern", default="*.pdf", help="File pattern (default: *.pdf)")
     batch_parser.add_argument("--limit", type=int, default=None, help="Max number of files to process")
     batch_parser.add_argument("--force", action="store_true", help="Force reprocessing even if duplicate")
-    batch_parser.add_argument("--use-llamaparse", action="action_store_true" if False else "store_true", help="Enable LlamaParse cloud parser")
+    batch_parser.add_argument("--use-llamaparse", action="store_true", help="Enable LlamaParse cloud parser")
     batch_parser.add_argument("--llama-key", default=DEFAULT_LLAMA_CLOUD_API_KEY, help="LlamaParse Cloud API Key")
+
+    # Command: load-db
+    load_db_parser = subparsers.add_parser("load-db", help="Load ingested deliverables from output/ into Database")
+    load_db_parser.add_argument("--db", default=None, help=f"Database connection URL (default: {DEFAULT_SQLITE_URL} or env DATABASE_URL)")
+    load_db_parser.add_argument("--output-dir", default="output", help="Directory containing JSON deliverables (default: output)")
+    load_db_parser.add_argument("--doc-id", default=None, help="Specific document ID to load")
+    load_db_parser.add_argument("--stats", action="store_true", help="Display current database table statistics")
 
     args = parser.parse_args()
 
@@ -229,6 +237,24 @@ def main():
             force_reprocess=args.force
         )
         print(json.dumps(summary, indent=2))
+    elif args.command == "load-db":
+        loader = DatabaseLoader(db_url=args.db)
+        if args.stats:
+            stats = loader.get_stats()
+            print("\n=== Database Statistics ===")
+            print(json.dumps(stats, indent=2, default=str))
+        elif args.doc_id:
+            doc_path = Path(args.output_dir) / "documents" / f"{args.doc_id}.json"
+            chunk_path = Path(args.output_dir) / "chunks" / f"{args.doc_id}_chunks.json"
+            res = loader.load_document_and_chunks(str(doc_path), str(chunk_path))
+            print(json.dumps(res, indent=2))
+        else:
+            summary = loader.load_all_from_output(args.output_dir)
+            print("\n=== Database Load Summary ===")
+            print(json.dumps(summary, indent=2))
+            stats = loader.get_stats()
+            print("\n=== Database Statistics ===")
+            print(json.dumps(stats, indent=2, default=str))
     else:
         # Default behavior: run test on 1950 directory
         run_1950_batch()

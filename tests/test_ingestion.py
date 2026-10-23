@@ -32,6 +32,7 @@ from extractor import (
 )
 from pipeline import IngestionPipeline
 from sample_generator import generate_sample_judgment_pdf
+from db_loader import DatabaseLoader
 
 
 def test_ocr_cleanup():
@@ -210,3 +211,33 @@ def test_end_to_end_pipeline(tmp_path):
     # Test Duplicate Detection
     dup_result = pipeline.process_document(pdf_path)
     assert dup_result.status == IngestionStatus.SKIPPED_DUPLICATE
+
+
+def test_database_loader(tmp_path):
+    """Validates that DatabaseLoader successfully initializes schema and bulk loads documents and chunks."""
+    # Generate and process sample document
+    pdf_path = str(tmp_path / "sample_doc.pdf")
+    generate_sample_judgment_pdf(pdf_path)
+
+    out_dir = str(tmp_path / "output")
+    pipeline = IngestionPipeline(output_dir=out_dir)
+    res = pipeline.process_document(pdf_path)
+    assert res.status == IngestionStatus.COMPLETED
+
+    # Test DB Loader with SQLite database in tmp_path
+    db_file = tmp_path / "test.db"
+    db_url = f"sqlite:///{db_file}"
+    loader = DatabaseLoader(db_url=db_url)
+
+    # Bulk load from output dir
+    load_summary = loader.load_all_from_output(output_dir=out_dir)
+    assert load_summary["documents_loaded"] == 1
+    assert load_summary["total_chunks_loaded"] > 0
+    assert load_summary["failed_count"] == 0
+
+    # Verify DB stats
+    stats = loader.get_stats()
+    assert stats["total_documents"] == 1
+    assert stats["total_chunks"] == load_summary["total_chunks_loaded"]
+    assert stats["sample_chunk"] is not None
+    assert "sample_doc" in stats["sample_chunk"]["chunk_id"]

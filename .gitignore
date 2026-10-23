@@ -1,6 +1,11 @@
 # Environment variables & secrets
 .env
 
+# Local Databases
+*.db
+*.sqlite3
+
+
 # Python Bytecode & Cache
 __pycache__/
 *.py[cod]
@@ -23,3 +28,4 @@ ENV/
 Thumbs.db
 .vscode/
 .idea/
+
