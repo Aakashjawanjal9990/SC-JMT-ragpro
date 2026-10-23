@@ -1,5 +1,5 @@
 # Hardened Non-Root Container for GCP Cloud Run Jobs / GKE Batch Workers
-FROM python:3.10-slim-bookworm
+FROM python:3.11-slim-bookworm
 
 # Environment flags for performance and security
 ENV PYTHONDONTWRITEBYTECODE=1 \

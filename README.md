@@ -1,6 +1,6 @@
 # Supreme Court Judgment RAG System — Data Ingestion & Embedding Pipeline
 
-[![Python](https://img.shields.io/badge/Python-3.10.0-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyMuPDF](https://img.shields.io/badge/PyMuPDF-1.25.3-FF6F00)](https://pymupdf.readthedocs.io/)
 [![LlamaParse](https://img.shields.io/badge/LlamaParse-0.6.94-7B2CBF)](https://cloud.llamaindex.ai/)
 [![Vertex AI](https://img.shields.io/badge/Vertex%20AI-text--embedding--004-4285F4?logo=googlecloud&logoColor=white)](https://cloud.google.com/vertex-ai)
@@ -55,7 +55,7 @@ All architectural, security, database, and embedding specifications are neatly o
 git clone https://github.com/Kedarlimbalkar/parsing.git
 cd parsing
 
-# Activate Python 3.10 virtual environment
+# Activate Python 3.11 virtual environment
 python -m venv venv
 venv\Scripts\activate       # On Windows
 source venv/bin/activate    # On Linux/macOS
@@ -108,7 +108,7 @@ python batch_embedder.py --source local --local-dir output/chunks
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore                      # Excludes .env, *.db, checkpoints, and caches
-├── Dockerfile                      # Hardened container for Cloud Run Jobs (Python 3.10)
+├── Dockerfile                      # Hardened container for Cloud Run Jobs (Python 3.11)
 ├── README.md                       # Main project documentation
 ├── requirements.txt                # Production dependencies
 │
