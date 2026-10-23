@@ -45,21 +45,31 @@ class DatabaseLoader:
         self.db_url = db_url or os.environ.get("DATABASE_URL") or DEFAULT_SQLITE_URL
         self.is_sqlite = self.db_url.startswith("sqlite")
         self.is_postgres = self.db_url.startswith("postgresql") or self.db_url.startswith("postgres")
+        self.engine = None
+
+        # Check for placeholder strings in DATABASE_URL (e.g. from secret template)
+        if "<" in self.db_url or ">" in self.db_url:
+            logger.warning(f"DATABASE_URL contains placeholder values ('{self.db_url}'). Database sync will be skipped until real credentials are provided.")
+            return
 
         logger.info(f"Connecting to database: {'SQLite (Local Dev)' if self.is_sqlite else 'PostgreSQL (Cloud SQL)'}")
 
-        if self.is_postgres:
-            self.engine = create_engine(
-                self.db_url,
-                pool_size=config.DB_POOL_SIZE,
-                max_overflow=config.DB_MAX_OVERFLOW,
-                pool_recycle=config.DB_POOL_RECYCLE,
-                pool_pre_ping=True
-            )
-        else:
-            self.engine = create_engine(self.db_url)
+        try:
+            if self.is_postgres:
+                self.engine = create_engine(
+                    self.db_url,
+                    pool_size=config.DB_POOL_SIZE,
+                    max_overflow=config.DB_MAX_OVERFLOW,
+                    pool_recycle=config.DB_POOL_RECYCLE,
+                    pool_pre_ping=True
+                )
+            else:
+                self.engine = create_engine(self.db_url)
 
-        self.init_schema()
+            self.init_schema()
+        except Exception as e:
+            logger.warning(f"Could not connect to database ({e}). Operating in GCS-only mode.")
+            self.engine = None
 
     def init_schema(self):
         """Creates the 9 parsing-required tables and performance indexes."""
@@ -465,6 +475,9 @@ class DatabaseLoader:
         - chunks
         Idempotent: Uses deterministic UUIDs so re-runs never duplicate records.
         """
+        if not self.engine:
+            return {"status": "SKIPPED_NO_DB"}
+
         with open(doc_json_path, "r", encoding="utf-8") as f:
             doc_data = json.load(f)
 
@@ -785,6 +798,8 @@ class DatabaseLoader:
 
     def get_stats(self) -> Dict[str, Any]:
         """Returns row counts across all 9 tables and sample chunk details."""
+        if not self.engine:
+            return {"status": "NO_DATABASE_CONNECTED"}
         with self.engine.connect() as conn:
             j_count = conn.execute(text("SELECT COUNT(*) FROM judgments")).scalar()
             f_count = conn.execute(text("SELECT COUNT(*) FROM source_files")).scalar()

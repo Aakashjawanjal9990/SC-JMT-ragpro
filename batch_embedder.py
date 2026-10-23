@@ -106,8 +106,9 @@ class BatchEmbedder:
             except Exception as e:
                 logger.warning(f"GCS client initialization skipped: {e}")
 
-        # 3. Ensure Embedding Model Registered in DB
-        self._register_model_in_db()
+        # 3. Ensure Embedding Model Registered in DB (if DB connected)
+        if self.engine:
+            self._register_model_in_db()
 
     def _register_model_in_db(self):
         """Registers the embedding model in the embedding_models table."""
@@ -190,44 +191,52 @@ class BatchEmbedder:
                 "now": now_str
             })
 
-        # Upsert into chunks and chunk_embeddings tables
-        with self.engine.begin() as conn:
-            for rec in records_to_insert:
-                # 1. Update chunks.embedding
-                conn.execute(text("""
-                    UPDATE chunks 
-                    SET embedding = :vec_json 
-                    WHERE chunk_id = :chunk_id;
-                """), {"chunk_id": rec["chunk_id"], "vec_json": rec["vec_json"]})
+        # Upsert into chunks and chunk_embeddings tables (if DB connected)
+        if self.engine:
+            with self.engine.begin() as conn:
+                for rec in records_to_insert:
+                    # 1. Update chunks.embedding
+                    if self.is_postgres:
+                        conn.execute(text("""
+                            UPDATE chunks 
+                            SET embedding = :vec_json::vector 
+                            WHERE chunk_id = :chunk_id;
+                        """), {"chunk_id": rec["chunk_id"], "vec_json": rec["vec_json"]})
+                    else:
+                        conn.execute(text("""
+                            UPDATE chunks 
+                            SET embedding = :vec_json 
+                            WHERE chunk_id = :chunk_id;
+                        """), {"chunk_id": rec["chunk_id"], "vec_json": rec["vec_json"]})
 
-                # 2. Upsert into chunk_embeddings table
-                if self.is_postgres:
-                    conn.execute(text("""
-                        INSERT INTO chunk_embeddings (
-                            chunk_embedding_uuid, chunk_uuid, embedding_model_uuid,
-                            provider, vector_store, sync_status, last_synced_at
-                        )
-                        SELECT 
-                            c.chunk_uuid, c.chunk_uuid, :model_uuid,
-                            'vertex_ai', 'pgvector', 'SYNCED', CURRENT_TIMESTAMP
-                        FROM chunks c
-                        WHERE c.chunk_id = :chunk_id
-                        ON CONFLICT (chunk_uuid, embedding_model_uuid) DO UPDATE SET
-                            sync_status = 'SYNCED',
-                            last_synced_at = CURRENT_TIMESTAMP;
-                    """), {"chunk_id": rec["chunk_id"], "model_uuid": rec["model_uuid"]})
-                else:
-                    conn.execute(text("""
-                        INSERT OR REPLACE INTO chunk_embeddings (
-                            chunk_embedding_uuid, chunk_uuid, embedding_model_uuid,
-                            provider, vector_store, sync_status, last_synced_at
-                        )
-                        SELECT 
-                            c.chunk_uuid, c.chunk_uuid, :model_uuid,
-                            'vertex_ai', 'sqlite_json', 'SYNCED', CURRENT_TIMESTAMP
-                        FROM chunks c
-                        WHERE c.chunk_id = :chunk_id;
-                    """), {"chunk_id": rec["chunk_id"], "model_uuid": rec["model_uuid"]})
+                    # 2. Upsert into chunk_embeddings table
+                    if self.is_postgres:
+                        conn.execute(text("""
+                            INSERT INTO chunk_embeddings (
+                                chunk_embedding_uuid, chunk_uuid, embedding_model_uuid,
+                                provider, vector_store, sync_status, last_synced_at
+                            )
+                            SELECT 
+                                c.chunk_uuid, c.chunk_uuid, :model_uuid,
+                                'vertex_ai', 'pgvector', 'SYNCED', CURRENT_TIMESTAMP
+                            FROM chunks c
+                            WHERE c.chunk_id = :chunk_id
+                            ON CONFLICT (chunk_uuid, embedding_model_uuid) DO UPDATE SET
+                                sync_status = 'SYNCED',
+                                last_synced_at = CURRENT_TIMESTAMP;
+                        """), {"chunk_id": rec["chunk_id"], "model_uuid": rec["model_uuid"]})
+                    else:
+                        conn.execute(text("""
+                            INSERT OR REPLACE INTO chunk_embeddings (
+                                chunk_embedding_uuid, chunk_uuid, embedding_model_uuid,
+                                provider, vector_store, sync_status, last_synced_at
+                            )
+                            SELECT 
+                                c.chunk_uuid, c.chunk_uuid, :model_uuid,
+                                'vertex_ai', 'sqlite_json', 'SYNCED', CURRENT_TIMESTAMP
+                            FROM chunks c
+                            WHERE c.chunk_id = :chunk_id;
+                        """), {"chunk_id": rec["chunk_id"], "model_uuid": rec["model_uuid"]})
 
         logger.info(f"Vectorized & synced {len(chunks_data)} chunks for {doc_id}.")
         return len(chunks_data)
