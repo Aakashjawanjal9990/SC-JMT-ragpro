@@ -12,6 +12,10 @@ env:
   REPO_NAME: scj-rag-repo
   IMAGE_TAG: asia-south1-docker.pkg.dev/sc-judgments-rag/scj-rag-repo/scj-pipeline:latest
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   # 1. Automated Test Suite
   test:
@@ -70,3 +74,4 @@ jobs:
           gcloud run jobs update ${{ env.JOB_NAME }} \
             --image ${{ env.IMAGE_TAG }} \
             --region ${{ env.REGION }}
+

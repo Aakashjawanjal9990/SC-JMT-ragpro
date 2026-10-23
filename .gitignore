@@ -1,8 +1,22 @@
 # Environment variables & secrets
 .env
+.env.*
+!.env.example
+
+# Service Account Keys, Certificates & Tokens
+*.pem
+*.key
+*.pfx
+*.p12
+*sa-key*.json
+*credential*.json
+*service-account*.json
+*secret*.json
+client_secrets*.json
 
 # Local Databases
 *.db
+*.sqlite
 *.sqlite3
 
 
