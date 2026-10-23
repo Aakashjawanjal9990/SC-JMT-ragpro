@@ -188,3 +188,4 @@ Expected output after completion:
 - `source_pages`: ~350,000 rows
 - `chunks`: ~3,500,000 rows
 - `chunk_embeddings`: ~3,500,000 rows (`sync_status = 'SYNCED'`)
+

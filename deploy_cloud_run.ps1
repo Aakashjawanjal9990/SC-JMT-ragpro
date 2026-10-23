@@ -77,6 +77,7 @@ gcloud run jobs $action $JobName `
     --memory=8Gi `
     --service-account=$ServiceAccount `
     --set-env-vars="GCP_PROJECT=$ProjectId,GCS_BUCKET=$BucketName,GCP_REGION=$Region,CONCURRENT_WORKERS=4" `
+    --set-secrets="DATABASE_URL=scj-database-url:latest" `
     --args="--start-year,1950,--end-year,2026,--mode,full"
 
 Write-Host "`n================================================================================" -ForegroundColor Green
@@ -87,3 +88,4 @@ Write-Host "    gcloud run jobs execute $JobName --region=$Region`n" -Foreground
 Write-Host "To monitor execution:" -ForegroundColor Cyan
 Write-Host "    gcloud run jobs executions list --job=$JobName --region=$Region" -ForegroundColor White
 Write-Host "================================================================================"
+

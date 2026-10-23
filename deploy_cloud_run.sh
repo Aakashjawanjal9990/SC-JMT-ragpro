@@ -79,6 +79,7 @@ gcloud run jobs ${ACTION} "${JOB_NAME}" \
     --memory=8Gi \
     --service-account="${SERVICE_ACCOUNT}" \
     --set-env-vars="GCP_PROJECT=${PROJECT_ID},GCS_BUCKET=${BUCKET_NAME},GCP_REGION=${REGION},CONCURRENT_WORKERS=4" \
+    --set-secrets="DATABASE_URL=scj-database-url:latest" \
     --args="--start-year,1950,--end-year,2026,--mode,full"
 
 echo "================================================================================"
@@ -92,3 +93,4 @@ echo "To monitor execution:"
 echo ""
 echo "    gcloud run jobs executions list --job=${JOB_NAME} --region=${REGION}"
 echo "================================================================================"
+
