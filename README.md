@@ -1,274 +1,162 @@
-# Supreme Court Judgment RAG System — Data Ingestion Pipeline
+# Supreme Court Judgment RAG System — Data Ingestion & Embedding Pipeline
 
 [![Python](https://img.shields.io/badge/Python-3.10.0-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyMuPDF](https://img.shields.io/badge/PyMuPDF-1.25.3-FF6F00)](https://pymupdf.readthedocs.io/)
 [![LlamaParse](https://img.shields.io/badge/LlamaParse-0.6.94-7B2CBF)](https://cloud.llamaindex.ai/)
-[![Pydantic](https://img.shields.io/badge/Pydantic-2.13.4-E92063?logo=pydantic&logoColor=white)](https://docs.pydantic.dev/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15%20%7C%2016-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![pgvector](https://img.shields.io/badge/pgvector-%3E%3D0.7.0-blue)](https://github.com/pgvector/pgvector)
-[![Tests](https://img.shields.io/badge/Tests-8%20Passed-success)](tests/test_ingestion.py)
+[![Vertex AI](https://img.shields.io/badge/Vertex%20AI-text--embedding--004-4285F4?logo=googlecloud&logoColor=white)](https://cloud.google.com/vertex-ai)
+[![PostgreSQL](https://img.shields.io/badge/Cloud%20SQL-PostgreSQL%2016-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![pgvector](https://img.shields.io/badge/pgvector-768--dim%20HNSW-blue)](https://github.com/pgvector/pgvector)
+[![Tests](https://img.shields.io/badge/Tests-9%20Passed-success)](tests/test_ingestion.py)
 
-**Owner / Module**: Kedar (Data Ingestion Engineer)  
+**Owner / Module**: Kedar (Data Ingestion & Pipeline Engineer)  
 **Target Dataset**: ~43,000 Indian Supreme Court judgment PDFs (1950 – Present)  
-**Repository**: [https://github.com/Kedarlimbalkar/parsing](https://github.com/Kedarlimbalkar/parsing)
+**GCP Storage Target**: `gs://sc-judgments-rag-prod-data/raw_pdfs/pdfs/year=YYYY/`  
+**Repository**: [https://github.com/Kedarlimbalkar/parsing](https://github.com/Kedarlimbalkar/parsing)  
 
 ---
 
 ## 1. Project Overview
 
-The **Data Ingestion Module** is the foundational data processing engine of the Supreme Court Judgment RAG system. It transforms raw, scanned, or complex legal PDF judgments into clean, page-aware, and structured JSON contracts for downstream database persistence, hybrid retrieval (dense vectors + BM25), and verifiable citations.
+The **Data Ingestion & Embedding Pipeline** is the production data processing engine for the Supreme Court Judgment RAG platform. It processes scanned, historical, and modern digital legal PDFs into clean, page-isolated, section-tagged chunks ($<512$ tokens), generates 768-dimensional dense vector embeddings using Google Cloud Vertex AI `text-embedding-004`, and syncs them into the official 9-table schema in PostgreSQL Cloud SQL (`pgvector`).
 
 ### Key Capabilities
-- **Dual-Engine Extraction**: High-fidelity cloud parsing via **LlamaParse (v2 REST API)** with automatic zero-downtime failover to local **PyMuPDF (`fitz`)** and 200 DPI OCR fallback.
-- **Strict Page-Boundary Isolation**: Text is chunked strictly page-by-page. A chunk never crosses page boundaries, guaranteeing 100% verifiable page citations (`original_page_number`).
-- **Heading-Preserving Logical Chunking**: Automatically identifies legal sections (`FACTS`, `ISSUES`, `SUBMISSIONS`, `JUDGMENT`, `ORDER`, and 1950s judicial opinion headers like `FAZL ALI J. -`) and tags child paragraphs under `section_heading`.
-- **Historical (1950+ S.C.R.) & Modern Judgment Extraction**: Accurately extracts multi-line uppercase party blocks (`v.` or `VERSUS`), bracketed Corams (`[SHRI HARILAL KANIA C.J., ... JJ.]`), case citations (`[1950] S.C.R. 15`), and judgment dates.
-- **Production Resilience**: SHA-256 duplicate detection, exponential backoff retries via `tenacity`, and resumable checkpoint state (`ingestion_state.json`).
+- **Decoupled Architecture**: Stage 1 parsing/chunking is decoupled from Stage 2 batch embedding, allowing vector re-indexing without re-parsing 43k PDFs.
+- **Dual-Engine Extraction**: High-fidelity parsing via **LlamaParse (v2 REST API)** with automatic zero-downtime failover to local **PyMuPDF (`fitz`)** and 200 DPI Tesseract OCR fallback.
+- **Strict Page-Boundary Isolation**: Text is chunked page-by-page. A chunk never crosses page boundaries, guaranteeing 100% verifiable page citations (`original_page_number`).
+- **Heading-Preserving Chunking**: Automatically identifies legal sections (`FACTS`, `ISSUES`, `SUBMISSIONS`, `JUDGMENT`, `ORDER`) and tags child paragraphs under `section_heading`.
+- **Mass Batch Embedding**: Generates unit-normalized 768-dim embeddings in sub-batches of 100 via Google Vertex AI `text-embedding-004` (in region `asia-south1`).
+- **9-Table Cloud SQL Schema**: Unified database persistence supporting SQLite (local testing) and PostgreSQL Cloud SQL with HNSW cosine indexes.
 
 ---
 
-## 2. Tech Stack & Version Specification
+## 2. Documentation Directory (`docs/`)
 
-### Core Software & Libraries
+All architectural, security, database, and embedding specifications are neatly organized in the [`docs/`](docs/) directory:
 
-| Technology / Package | Exact Version | Role in Project |
-| :--- | :--- | :--- |
-| **Python** | **`3.10.0`** | Primary programming language & runtime. |
-| **`llama-parse`** | **`0.6.94`** | Cloud-based PDF parser (v2 REST API) for markdown, complex layouts, and tables. |
-| **`llama-cloud`** | **`0.1.46`** | LlamaCloud client library. |
-| **`llama-index-core`** | **`0.14.25`** | Core document and node abstraction framework. |
-| **`PyMuPDF` (`fitz`)** | **`1.25.3`** | Fast local selectable text extraction, page parsing, and OCR image rendering. |
-| **`pydantic`** | **`2.13.4` (v2)** | Strict schema validation and data contracts ([`models.py`](models.py)). |
-| **`httpx`** | **`0.28.1`** | Asynchronous/synchronous HTTP client for LlamaParse v2 upload & polling. |
-| **`tenacity`** | **`8.5.0`** | Exponential backoff retry engine for network & extraction fault tolerance. |
-| **`python-dotenv`** | **`1.0.1`** | Environment variable management (`LLAMA_CLOUD_API_KEY`). |
-| **`reportlab`** | **`4.4.1`** | PDF generation toolkit for realistic Supreme Court sample tests. |
-| **`pytest`** | **`9.1.1`** | Test runner for unit, contract, and pipeline tests. |
-
-### Shared GCP Cloud & Database Stack
-*(Coordinated with **Prathmesh** for Cloud Infra & **Anuradha** for Database Architecture)*
-
-| GCP Service / Component | Version / Specification | Usage in this System |
-| :--- | :--- | :--- |
-| **Cloud SQL for PostgreSQL** | **PostgreSQL `15` or `16`** | Relational persistence of `documents` and `chunks` tables. |
-| **`pgvector` Extension** | **`pgvector >= 0.7.0`** | Vector column (`VECTOR(1536)`) for Pratik's dense embeddings. |
-| **`pg_trgm` Extension** | Built-in module | Trigram GIN indexes for fuzzy search on `appellant` and `respondent` names. |
-| **Google Cloud Storage (GCS)** | Standard Regional Bucket | Object storage for raw PDFs and JSON deliverable archives. |
-| **Google Secret Manager** | GCP Native Service | Secure storage and access to `LLAMA_CLOUD_API_KEY`. |
-| **Compute / Container** | **Cloud Run** or **GCE (`e2-standard-4`)** | Worker environment running batch ingestion. |
+| Document | Description |
+| :--- | :--- |
+| **[`docs/HOW_WE_DID_THE_EMBEDDING.md`](docs/HOW_WE_DID_THE_EMBEDDING.md)** | **Complete step-by-step guide on how vector embeddings are generated, normalized, and saved.** |
+| **[`docs/EMBEDDING_APPROACH_AND_DATABASE_HANDOFF.md`](docs/EMBEDDING_APPROACH_AND_DATABASE_HANDOFF.md)** | **Database architect handoff spec for Anuradha (DDL, pgvector HNSW indexes, RAM sizing).** |
+| **[`docs/DATABASE_INTEGRATION_SPEC.md`](docs/DATABASE_INTEGRATION_SPEC.md)** | Complete 9-table schema definition, cascade foreign keys, and indexes. |
+| **[`docs/DATA_INGESTION_ARCHITECTURE.md`](docs/DATA_INGESTION_ARCHITECTURE.md)** | In-depth parsing, OCR cleanup, and chunking technical specification. |
+| **[`docs/GCP_ACCESS_AND_TECH_STACK.md`](docs/GCP_ACCESS_AND_TECH_STACK.md)** | Production GCP IAM roles, Cloud Run Jobs sizing, and service credentials. |
+| **[`docs/PARSING_AND_CHUNKING_APPROACH.md`](docs/PARSING_AND_CHUNKING_APPROACH.md)** | Legal chunking logic, OCR header stripping, and token constraints. |
+| **[`docs/PARSING_AND_CHUNKING_SPEC.md`](docs/PARSING_AND_CHUNKING_SPEC.md)** | Detailed single-page extraction and downstream retrieval contracts. |
+| **[`docs/SECURITY_AND_INFRASTRUCTURE_SPEC.md`](docs/SECURITY_AND_INFRASTRUCTURE_SPEC.md)** | Security hardening, non-root containers, Secret Manager, and VPC egress. |
+| **[`docs/PROJECT_WORK_SUMMARY.md`](docs/PROJECT_WORK_SUMMARY.md)** | Comprehensive project milestone report and operational summary. |
 
 ---
 
-## 3. Architecture & Data Flow
+## 3. Quick Start & Execution
 
-```
-[ Raw Judgment PDF ]
-        │
-        ▼
-[ SHA-256 Duplicate Check ] ──(Duplicate found)──► Skip & Log
-        │ (New File)
-        ├─────────────────────────────┐
-        ▼                             ▼
-[ LlamaParse Cloud v2 API ]   [ PyMuPDF Local + OCR ]
-(Markdown / Complex Tables)   (Fast Selectable Text)
-        │                             │
-        └──────────────┬──────────────┘
-                       │
-                       ▼
-          [ Legal Text Cleaner ]
-          - Fix hyphenated line wraps (repre- \nsentative -> representative)
-          - OCR typo correction (C0urt -> Court, Jncome-tax -> Income-tax)
-                       │
-                       ▼
-        [ Legal Metadata Extractor ]
-        - Case No / SCR Citation, Parties, Coram / Judges, Date
-                       │
-                       ▼
-        [ Page-Aware Logical Chunker ]
-        - Heading isolation & inheritance (FACTS, JUDGMENT, FAZL ALI J. -)
-        - Sub-split on \n\n and numbered items (1., 2., (a), [1])
-        - Assign deterministic chunk_id: {doc_id}_p{page}_c{index}
-                       │
-        ┌──────────────┴──────────────┐
-        ▼                             ▼
-[ output/chunks/{id}_chunks.json ]  [ output/documents/{id}.json ]
-(For Anuradha's DB & Pratik's RAG)  (Document rollup & status)
-```
-
----
-
-## 4. Team Dependencies & Handoffs
-
-| Teammate | Role | What You Provide | Primary Spec File |
-| :--- | :--- | :--- | :--- |
-| **Anuradha** | Database Engineer | PostgreSQL DDL tables, sizing (~43k docs / ~10M chunks), cascade foreign keys, and batch loader script | [`DATABASE_INTEGRATION_SPEC.md`](DATABASE_INTEGRATION_SPEC.md) |
-| **Pratik** | Retrieval Engineer | `chunk_id`, clean `content`, headings, case metadata, chunk sizing guarantees (<512 tokens) for BM25 + Dense vector search | `output/chunks/` & [`DATA_INGESTION_ARCHITECTURE.md`](DATA_INGESTION_ARCHITECTURE.md) |
-| **Prathmesh** | Cloud Infrastructure | Secret key (`LLAMA_CLOUD_API_KEY`), outbound HTTPS egress URL, worker CPU/RAM specs, GCS bucket sizing | `.env.example`, [`README.md`](README.md) |
-| **Nilesh** | RAG Integrator | Strict page-level traceability, citation format, section heading context | [`DATA_INGESTION_ARCHITECTURE.md`](DATA_INGESTION_ARCHITECTURE.md) |
-| **Tanvi** | Frontend Engineer | `document_id` and `original_page_number` for clickable PDF citations | [`models.py`](models.py) |
-| **Kusuma** | QA & Supporting APIs | Document metadata API contract, `status_error_report.json`, sample test PDFs | `output/documents/`, `reports/` |
-| **Aakash** | CI/CD & Final Report | `pytest` test command, architecture documentation, throughput metrics | `tests/`, [`DATA_INGESTION_ARCHITECTURE.md`](DATA_INGESTION_ARCHITECTURE.md) |
-
----
-
-## 5. Quick Start & Execution Guide
-
-### 5.1 Installation & Setup
+### 3.1 Local Environment Setup
 ```bash
 # Clone the repository
 git clone https://github.com/Kedarlimbalkar/parsing.git
 cd parsing
 
-# Create and activate virtual environment
+# Activate Python 3.10 virtual environment
 python -m venv venv
-# On Windows (CMD):
-venv\Scripts\activate
-# On Linux/macOS:
-source venv/bin/activate
+venv\Scripts\activate       # On Windows
+source venv/bin/activate    # On Linux/macOS
 
 # Install dependencies
 pip install -r requirements.txt
-# (or pip install llama-parse pymupdf pydantic httpx tenacity python-dotenv reportlab pytest)
-
-# Setup environment key (optional, for LlamaParse cloud parser)
-copy .env.example .env
-# Edit .env and insert your LLAMA_CLOUD_API_KEY
 ```
 
-### 5.2 Running Tests
+### 3.2 Running Automated Tests
 ```bash
-python -m pytest tests
-# ============================== 8 passed in ~3s ==============================
+pytest tests/ -v
+# ============================== 9 passed in ~7s ==============================
 ```
 
-### 5.3 Batch Processing the 1950 Supreme Court PDFs (`data/sample_pdfs/year=1950/english`)
-
-#### A. Quick Test (Process first 3 PDFs):
+### 3.3 Running the Embedding Demonstration (For Anuradha)
 ```bash
-python main.py test-1950 --limit 3
+python embedding_demo_for_anuradha.py
+```
+*Validates 768 dimensions, L2 unit norm ($\|v\|_2 = 1.000000$), semantic cosine queries, and displays database DDL.*
+
+---
+
+## 4. Production GCP Pipelines
+
+### 4.1 Stage 1: Streaming PDF Extraction & Ingestion
+Streams raw PDFs directly from GCS (`gs://sc-judgments-rag-prod-data/raw_pdfs/pdfs/year=YYYY/`), parses them, and saves chunk collections:
+```bash
+# Process all PDFs for a specific year from GCS
+python gcp_production_pipeline.py --year 1950 --workers 8
+
+# Process local directory
+python gcp_production_pipeline.py --source-dir data/sample_pdfs --workers 4
 ```
 
-#### B. Process all 43 PDFs in the 1950 collection:
+### 4.2 Stage 2: Mass Batch Embedding & pgvector Sync
+Vectorizes chunk collections and updates Cloud SQL PostgreSQL:
 ```bash
-python main.py test-1950 --limit 0
-```
+# Mass embed from GCS chunks folder
+python batch_embedder.py --source gcs --bucket sc-judgments-rag-prod-data --workers 8
 
-#### C. Process using LlamaParse Cloud Engine:
-```bash
-python main.py test-1950 --limit 2 --use-llamaparse
-```
-
-#### D. Force Reprocess (Bypassing duplicate cache):
-```bash
-python main.py test-1950 --limit 3 --force
-```
-
-### 5.4 Ingesting Any Custom PDF
-```bash
-python main.py process-pdf --file "data/sample_pdfs/year=1950/english/1950_1_15_25_EN.pdf" --force
-```
-
-### 5.5 Single-Page JSON Contract Extraction CLI
-```bash
-python main.py process-page --doc-id "INSC_2023_CA_1042" --page 1 --text "raw text string or path"
+# Embed local chunk files and update database
+python batch_embedder.py --source local --local-dir output/chunks
 ```
 
 ---
 
-## 6. Project Structure
+## 5. Repository Structure
 
 ```
-├── .env.example                    # Template for environment variables (LLAMA_CLOUD_API_KEY)
-├── .gitignore                      # Excludes .env, caches, and local environments
-├── README.md                       # Main project documentation and run guide
-├── DATA_INGESTION_ARCHITECTURE.md  # In-depth parsing, cleaning, and chunking technical spec
-├── DATABASE_INTEGRATION_SPEC.md    # Handoff spec for Database Architect (DDL & Indexes)
-├── cleaner_chunker.py              # Text cleaner, regex metadata extractor, page-aware chunker
-├── extractor.py                    # LlamaParse v2 cloud parser + PyMuPDF & OCR fallback
-├── models.py                       # Pydantic data contracts (PageIngestionContract, etc.)
-├── pipeline.py                     # Batch orchestrator, SHA-256 deduplication, checkpointing
-├── main.py                         # CLI tool for batch runs, single-page tests, and sample demo
-├── sample_generator.py             # Realistic Indian Supreme Court PDF generator (ReportLab)
+├── .dockerignore
+├── .env.example
+├── .gitignore                      # Excludes .env, *.db, checkpoints, and caches
+├── Dockerfile                      # Hardened container for Cloud Run Jobs (Python 3.10)
+├── README.md                       # Main project documentation
+├── requirements.txt                # Production dependencies
+│
+├── core/
+│   ├── atomic_io.py                # Crash-safe atomic file writing (fsync + replace)
+│   ├── config.py                   # Centralized configuration (GCP & Local defaults)
+│   ├── extractor.py                # Pre-flight PDF validation, PyMuPDF, OCR & LlamaParse
+│   ├── cleaner_chunker.py          # Legal section detection, OCR cleaner & <512 token chunker
+│   ├── db_loader.py                # 9-table schema database loader (Postgres & SQLite)
+│   ├── models.py                   # Strict Pydantic contracts for downstream consumers
+│   ├── batch_embedder.py           # High-throughput Vertex AI 768-dim embedder
+│   ├── gcp_production_pipeline.py  # Production GCS streaming orchestrator
+│   ├── pipeline.py                 # Local batch orchestrator with retry logic
+│   └── main.py                     # Unified CLI entrypoint
+│
+├── docs/                           # Centralized specifications & architecture handoffs
+│   ├── HOW_WE_DID_THE_EMBEDDING.md
+│   ├── EMBEDDING_APPROACH_AND_DATABASE_HANDOFF.md
+│   ├── DATABASE_INTEGRATION_SPEC.md
+│   ├── DATA_INGESTION_ARCHITECTURE.md
+│   ├── GCP_ACCESS_AND_TECH_STACK.md
+│   ├── PARSING_AND_CHUNKING_APPROACH.md
+│   ├── PARSING_AND_CHUNKING_SPEC.md
+│   ├── PROJECT_WORK_SUMMARY.md
+│   └── SECURITY_AND_INFRASTRUCTURE_SPEC.md
+│
 ├── tests/
-│   └── test_ingestion.py           # 8 automated unit & contract tests
-├── data/
-│   └── sample_pdfs/
-│       ├── INSC_2023_CA_1042.pdf   # Generated modern sample judgment
-│       └── year=1950/english/      # 43 historical 1950 Supreme Court Reports (S.C.R.) PDFs
+│   └── test_ingestion.py           # 9 automated unit, extraction & contract tests
+│
 ├── output/
-│   ├── chunks/                     # JSON chunk records formatted for DB & Retrieval
-│   └── documents/                  # JSON document summary & rollup metadata
-├── reports/
-│   └── status_error_report.json    # Isolated failure tracking log
-└── ingestion_state.json            # Persistent hash & status checkpoint for crash recovery
+│   ├── chunks/                     # Enriched chunk JSONs containing 768-dim embeddings
+│   ├── documents/                  # Document rollup metadata
+│   └── sample_embedded_chunk_for_anuradha.json # Dedicated handoff deliverable
+│
+└── embedding_demo_for_anuradha.py  # Standalone interactive demo script
 ```
 
 ---
 
-## 7. Deliverables & Data Contracts
+## 6. GCP Credentials Required for Production
 
-### A. Single-Page Extraction Contract
-Conforms strictly to Kedar's single-page contract:
-```json
-{
-  "document_id": "1950_1_15_25_EN",
-  "original_page_number": 1,
-  "page_metadata": {
-    "case_number": "S.C.R.",
-    "appellant": "RAM KRISHNA RAMNATH AGARWAL OF KAMPTEE",
-    "respondent": "SECRETARY, MUNICIPAL COMMITTEE, KAMP TEE",
-    "date_of_judgment": "1950 March 14",
-    "judges": [
-      "HARILAL KANIA C.J",
-      "SAIYID FAZL ALI",
-      "PATANJALI SASTRI",
-      "MEHR CHAND MAHAJAN",
-      "MuKHERJEA",
-      "S.R. DAS JJ"
-    ]
-  },
-  "chunks": [
-    {
-      "chunk_index": 1,
-      "content": "...",
-      "chunk_metadata": {
-        "section_heading": null
-      }
-    }
-  ]
-}
-```
+To run against Google Cloud Platform production resources, the following credentials are required:
 
-### B. Downstream Ingestion Contract (For Anuradha & Pratik)
-Stored in `output/chunks/{document_id}_chunks.json`:
-```json
-[
-  {
-    "chunk_id": "1950_1_15_25_EN_p1_c1",
-    "document_id": "1950_1_15_25_EN",
-    "original_page_number": 1,
-    "chunk_index": 1,
-    "content": "...",
-    "section_heading": null,
-    "case_number": "S.C.R.",
-    "appellant": "RAM KRISHNA RAMNATH AGARWAL OF KAMPTEE",
-    "respondent": "SECRETARY, MUNICIPAL COMMITTEE, KAMP TEE",
-    "date_of_judgment": "1950 March 14",
-    "judges": [
-      "HARILAL KANIA C.J",
-      "SAIYID FAZL ALI",
-      "PATANJALI SASTRI",
-      "MEHR CHAND MAHAJAN",
-      "MuKHERJEA",
-      "S.R. DAS JJ"
-    ]
-  }
-]
-```
-
----
-
-## 8. License & Contribution
-
-Maintained by **Kedar Limbalkar** as part of the **Supreme Court Judgment RAG System** project.  
-Contributions, improvements, and contract revisions are tracked via GitHub issues and pull requests.
+1. **Google Cloud Service Account Key** (`sa-key.json` or `GOOGLE_APPLICATION_CREDENTIALS`):
+   - **`roles/storage.objectAdmin`** on `gs://sc-judgments-rag-prod-data`
+   - **`roles/aiplatform.user`** for Vertex AI `text-embedding-004` API calls in `asia-south1`
+   - **`roles/cloudsql.client`** for Cloud SQL connectivity
+2. **Cloud SQL PostgreSQL Connection String**:
+   - `DATABASE_URL=postgresql://<db_user>:<db_password>@<cloud_sql_ip>:5432/scj_rag`
+3. **LlamaParse API Key** (optional, for complex tables):
+   - `LLAMA_CLOUD_API_KEY=llx-...` (stored in Google Secret Manager)

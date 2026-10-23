@@ -177,3 +177,4 @@ python embedding_demo_for_anuradha.py
 | **Database Loader (9 Tables)** | `db_loader.py` | Complete (Postgres & SQLite) |
 | **Sample JSON Deliverable** | `output/sample_embedded_chunk_for_anuradha.json` | Generated (15.7 KB) |
 | **Full Local Chunks** | `output/chunks/*.json` (4 files, 88 chunks) | Vectorized & Injected |
+
