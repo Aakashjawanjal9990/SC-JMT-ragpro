@@ -42,6 +42,8 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run PyTest
+        env:
+          LLAMA_CLOUD_API_KEY: "llx-mock-ci-test-key-12345"
         run: |
           pytest tests/ -v
 

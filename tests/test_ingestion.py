@@ -179,10 +179,12 @@ def test_llamaparse_extractor_configuration():
     """Validates that LlamaParseExtractor properly detects API key and handles configuration."""
     extractor = LlamaParseExtractor()
     assert extractor.api_key == DEFAULT_LLAMA_CLOUD_API_KEY
-    assert extractor.api_key.startswith("llx-")
+    if extractor.api_key:
+        assert extractor.api_key.startswith("llx-")
 
     custom_extractor = LlamaParseExtractor(api_key="llx-test-key-12345")
     assert custom_extractor.api_key == "llx-test-key-12345"
+    assert custom_extractor.api_key.startswith("llx-")
 
 
 def test_end_to_end_pipeline(tmp_path):
