@@ -51,6 +51,7 @@ jobs:
   deploy:
     name: Build & Deploy to Cloud Run
     needs: test
+    if: ${{ secrets.GCP_SA_KEY != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
