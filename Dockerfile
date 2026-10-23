@@ -29,7 +29,7 @@ COPY --chown=appuser:appuser . .
 # Switch to non-root user
 USER appuser
 
-# Default Entrypoint for Cloud Run Jobs
-ENTRYPOINT ["python", "gcp_production_pipeline.py"]
-CMD ["run-gcs", "--prefix", "raw_pdfs/", "--workers", "4", "--embed"]
+# Default Entrypoint for Cloud Run Jobs (Supports 1950-2026 task arrays)
+ENTRYPOINT ["python", "cloud_run_entrypoint.py"]
+CMD ["--start-year", "1950", "--end-year", "2026", "--mode", "full", "--workers", "4"]
 
