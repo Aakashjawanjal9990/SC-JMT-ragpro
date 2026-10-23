@@ -250,6 +250,11 @@ class BatchEmbedder:
             content_str = blob.download_as_text()
             chunks_data = json.loads(content_str)
             count = self.process_chunk_collection(doc_id, chunks_data)
+            # Update the GCS JSON with the newly injected 768-dim embeddings
+            blob.upload_from_string(
+                json.dumps(chunks_data, indent=2, ensure_ascii=False),
+                content_type="application/json"
+            )
             return {"document_id": doc_id, "status": "COMPLETED", "chunks_embedded": count}
         except Exception as e:
             logger.error(f"Failed embedding GCS blob {blob_name}: {e}")

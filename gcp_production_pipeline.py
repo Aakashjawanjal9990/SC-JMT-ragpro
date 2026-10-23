@@ -260,8 +260,14 @@ class GCPProductionPipeline:
             raise RuntimeError("GCS bucket is not initialized.")
 
         doc_id = self.derive_document_id(blob_name)
-        chunks_blob_name = f"deliverables/chunks/{doc_id}_chunks.json"
-        doc_blob_name = f"deliverables/documents/{doc_id}.json"
+
+        # Preserve Year Partitioning from GCS path (e.g. year=1950/)
+        import re
+        year_match = re.search(r"year=(\d{4})", blob_name)
+        year_folder = f"year={year_match.group(1)}/" if year_match else ""
+
+        chunks_blob_name = f"deliverables/chunks/{year_folder}{doc_id}_chunks.json"
+        doc_blob_name = f"deliverables/documents/{year_folder}{doc_id}.json"
 
         # Check if already processed in GCS
         chunks_blob = self.bucket.blob(chunks_blob_name)
