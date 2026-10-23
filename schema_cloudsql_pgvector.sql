@@ -204,3 +204,4 @@ INSERT INTO embedding_models (
 ) VALUES (
     '00000000-0000-0000-0000-000000000768', 'text-embedding-004', 'vertex_ai', 'v1', 768, TRUE
 ) ON CONFLICT (provider, model_id, version) DO NOTHING;
+

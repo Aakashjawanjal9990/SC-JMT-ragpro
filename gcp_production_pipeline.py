@@ -359,7 +359,9 @@ class GCPProductionPipeline:
         # Horizontal Sharding for Cloud Run Jobs Array Tasks
         task_index = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
         task_count = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
-        if task_count > 1:
+        # If a specific year is already passed (entrypoint assigned year to this task),
+        # process all PDFs for this year. Only shard if processing an unpartitioned directory.
+        if task_count > 1 and not year:
             logger.info(f"Running as Cloud Run Task {task_index + 1}/{task_count}. Sharding work...")
             my_blobs = [b for idx, b in enumerate(all_blobs) if idx % task_count == task_index]
         else:
