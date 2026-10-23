@@ -1,0 +1,48 @@
+{
+  "processed_hashes": {
+    "efa6e9fa70f9dbf7d574edfbfcb569c551c875e06b211c1ee80cc51f4e55caf7": "INSC_2023_CA_1042",
+    "7435cf6ec2a0e30b72a59f8e876df3dbe8f9c7fa975fa7f60931ebdfabbfbc86": "INSC_2023_CA_1042",
+    "85d72d9b63f1460012922b84fee66b4490dcba964b7bf1416cfd99ff02ea85b4": "INSC_2023_CA_1042",
+    "81661ce9001e2cbd7dd162f80141c5fb634e6271e23ac182f30027b302971185": "1950_1_1008_1018_EN",
+    "9789e45cda05cbea4886888e54277fd5831220afa3976a62d3d69025114ae7a8": "1950_1_15_25_EN",
+    "6f77778e8b2e0518393efa6e947fc8c0dc0d8fa58214ea4fb7f83e8cdba089c0": "1950_1_25_29_EN"
+  },
+  "documents": {
+    "INSC_2023_CA_1042": {
+      "file_path": "data\\sample_pdfs\\INSC_2023_CA_1042.pdf",
+      "sha256": "85d72d9b63f1460012922b84fee66b4490dcba964b7bf1416cfd99ff02ea85b4",
+      "status": "COMPLETED",
+      "parser_used": "llamaparse",
+      "total_pages": 3,
+      "total_chunks": 16,
+      "last_updated": "2026-10-22T09:22:55.580847"
+    },
+    "1950_1_1008_1018_EN": {
+      "file_path": "data\\sample_pdfs\\year=1950\\english\\1950_1_1008_1018_EN.pdf",
+      "sha256": "81661ce9001e2cbd7dd162f80141c5fb634e6271e23ac182f30027b302971185",
+      "status": "COMPLETED",
+      "parser_used": "pymupdf",
+      "total_pages": 11,
+      "total_chunks": 30,
+      "last_updated": "2026-10-22T10:27:12.015830"
+    },
+    "1950_1_15_25_EN": {
+      "file_path": "data\\sample_pdfs\\year=1950\\english\\1950_1_15_25_EN.pdf",
+      "sha256": "9789e45cda05cbea4886888e54277fd5831220afa3976a62d3d69025114ae7a8",
+      "status": "COMPLETED",
+      "parser_used": "pymupdf",
+      "total_pages": 11,
+      "total_chunks": 31,
+      "last_updated": "2026-10-22T10:27:12.334212"
+    },
+    "1950_1_25_29_EN": {
+      "file_path": "data\\sample_pdfs\\year=1950\\english\\1950_1_25_29_EN.pdf",
+      "sha256": "6f77778e8b2e0518393efa6e947fc8c0dc0d8fa58214ea4fb7f83e8cdba089c0",
+      "status": "COMPLETED",
+      "parser_used": "pymupdf",
+      "total_pages": 5,
+      "total_chunks": 11,
+      "last_updated": "2026-10-22T10:27:12.460313"
+    }
+  }
+}
