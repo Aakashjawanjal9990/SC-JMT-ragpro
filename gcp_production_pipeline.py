@@ -158,12 +158,20 @@ class GCPProductionPipeline:
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
             texts = [c["content"] for c in batch]
-            try:
-                embeddings = self.embed_model.get_embeddings(texts)
-                for chunk, emb in zip(batch, embeddings):
-                    chunk["embedding"] = emb.values
-            except Exception as e:
-                logger.warning(f"Vertex AI embedding batch failed: {e}")
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    embeddings = self.embed_model.get_embeddings(texts)
+                    for chunk, emb in zip(batch, embeddings):
+                        chunk["embedding"] = emb.values
+                    break
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        sleep_time = (2 ** attempt) + 0.5
+                        logger.warning(f"Vertex AI retry {attempt + 1}/{max_retries} after {sleep_time:.1f}s: {e}")
+                        time.sleep(sleep_time)
+                    else:
+                        logger.error(f"Vertex AI embedding batch permanently failed after {max_retries} attempts: {e}")
         return chunks
 
     def process_pdf_file(

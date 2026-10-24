@@ -147,9 +147,16 @@ class BatchEmbedder:
         return [round(x / norm, 6) for x in vec]
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
-        """Calls Vertex AI to embed a list of texts in batches of 100, or uses deterministic 768-dim generator."""
+        """Calls Vertex AI to embed a list of texts in batches of 100."""
+        allow_mock = os.environ.get("ALLOW_MOCK_EMBEDDINGS", "false").lower() in ("true", "1")
         if not self.model:
-            # Generate unit-normalized 768-dim vectors matching Vertex AI text-embedding-004
+            if not allow_mock:
+                raise RuntimeError(
+                    "Vertex AI embedding model is not initialized. Mock embeddings are disabled "
+                    "to prevent zero-similarity noise (Review Issue C1). Authenticate with GCP or set "
+                    "ALLOW_MOCK_EMBEDDINGS=true for offline testing."
+                )
+            logger.warning("ALLOW_MOCK_EMBEDDINGS=true: Generating deterministic mock vectors for test harness.")
             return [self._generate_dense_768_embedding(t) for t in texts]
 
         all_vectors = []
@@ -159,7 +166,10 @@ class BatchEmbedder:
                 embeddings = self.model.get_embeddings(sub_batch)
                 all_vectors.extend([e.values for e in embeddings])
             except Exception as e:
-                logger.error(f"Vertex AI embedding call failed: {e}. Falling back to 768-dim vectors.")
+                logger.error(f"Vertex AI embedding call failed: {e}.")
+                if not allow_mock:
+                    raise RuntimeError(f"Vertex AI embedding API failed: {e}. Aborting to avoid mock data.")
+                logger.warning("Falling back to mock vectors because ALLOW_MOCK_EMBEDDINGS=true.")
                 all_vectors.extend([self._generate_dense_768_embedding(t) for t in sub_batch])
         return all_vectors
 
@@ -184,7 +194,9 @@ class BatchEmbedder:
             # Inject embedding vector into the chunk object
             c["embedding"] = vec
             chunk_id = c["chunk_id"]
+            ce_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{chunk_id}.{model_uuid}"))
             records_to_insert.append({
+                "ce_uuid": ce_uuid,
                 "chunk_id": chunk_id,
                 "model_uuid": model_uuid,
                 "vec_json": json.dumps(vec),
@@ -209,7 +221,7 @@ class BatchEmbedder:
                             WHERE chunk_id = :chunk_id;
                         """), {"chunk_id": rec["chunk_id"], "vec_json": rec["vec_json"]})
 
-                    # 2. Upsert into chunk_embeddings table
+                    # 2. Upsert into chunk_embeddings table with independent UUID (Fix for Issue C6)
                     if self.is_postgres:
                         conn.execute(text("""
                             INSERT INTO chunk_embeddings (
@@ -217,14 +229,14 @@ class BatchEmbedder:
                                 provider, vector_store, sync_status, last_synced_at
                             )
                             SELECT 
-                                c.chunk_uuid, c.chunk_uuid, :model_uuid,
+                                :ce_uuid, c.chunk_uuid, :model_uuid,
                                 'vertex_ai', 'pgvector', 'SYNCED', CURRENT_TIMESTAMP
                             FROM chunks c
                             WHERE c.chunk_id = :chunk_id
                             ON CONFLICT (chunk_uuid, embedding_model_uuid) DO UPDATE SET
                                 sync_status = 'SYNCED',
                                 last_synced_at = CURRENT_TIMESTAMP;
-                        """), {"chunk_id": rec["chunk_id"], "model_uuid": rec["model_uuid"]})
+                        """), {"ce_uuid": rec["ce_uuid"], "chunk_id": rec["chunk_id"], "model_uuid": rec["model_uuid"]})
                     else:
                         conn.execute(text("""
                             INSERT OR REPLACE INTO chunk_embeddings (
@@ -232,11 +244,11 @@ class BatchEmbedder:
                                 provider, vector_store, sync_status, last_synced_at
                             )
                             SELECT 
-                                c.chunk_uuid, c.chunk_uuid, :model_uuid,
+                                :ce_uuid, c.chunk_uuid, :model_uuid,
                                 'vertex_ai', 'sqlite_json', 'SYNCED', CURRENT_TIMESTAMP
                             FROM chunks c
                             WHERE c.chunk_id = :chunk_id;
-                        """), {"chunk_id": rec["chunk_id"], "model_uuid": rec["model_uuid"]})
+                        """), {"ce_uuid": rec["ce_uuid"], "chunk_id": rec["chunk_id"], "model_uuid": rec["model_uuid"]})
 
         logger.info(f"Vectorized & synced {len(chunks_data)} chunks for {doc_id}.")
         return len(chunks_data)

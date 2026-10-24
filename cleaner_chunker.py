@@ -87,19 +87,24 @@ class LegalMetadataExtractor:
         # Clean text for metadata extraction by stripping markdown artifacts if present
         plain_text = re.sub(r'[*#_]', '', page_text)
 
-        # 1. Case Number pattern (Civil Appeal, Criminal Appeal, SLP, Writ Petition, SCR Citation, etc.)
+        # 1. Case Number pattern (Civil Appeal, Criminal Appeal, SLP, Writ Petition, etc.)
         case_no_match = re.search(
             r'(?:(?:CIVIL|CRIMINAL)\s+APPEAL\s+NO[S]?\.?|SPECIAL\s+LEAVE\s+PETITION\s*(?:\([A-Z]+\))?\s*NO[S]?\.?|SLP\s*(?:\([A-Z]+\))?\s*NO[S]?\.?|WRIT\s+PETITION\s*(?:\([A-Z]+\))?\s*NO[S]?\.?|REVIEW\s+PETITION\s*(?:\([A-Z]+\))?\s*NO[S]?\.?|CASE\s+NO[S]?\.?)\s*(?:OF|/)?\s*[\d\s/\-ofOF]+(?:\s+OF\s+\d{4})?',
             plain_text,
             re.IGNORECASE
         )
         if case_no_match:
-            metadata.case_number = ' '.join(case_no_match.group(0).split())
-        else:
-            # Check for Supreme Court Reports citation: e.g., "[1950] S.C.R. 15" or "1950 S.C.R. 563"
-            scr_match = re.search(r'(?:\[?\d{4}\]?\s+S\.C\.R\.?\s*[\d\s/\-]+|S\.C\.R\.\s*[\d\s/\-]+)', plain_text, re.IGNORECASE)
+            cand = ' '.join(case_no_match.group(0).split())
+            if re.search(r'\d+', cand):
+                metadata.case_number = cand
+
+        if not metadata.case_number:
+            # Check for specific Supreme Court Reports volume citation with page numbers: e.g., "[1950] S.C.R. 15"
+            scr_match = re.search(r'\[?\d{4}\]?\s+S\.C\.R\.?\s+\d+', plain_text, re.IGNORECASE)
             if scr_match:
-                metadata.case_number = ' '.join(scr_match.group(0).split())
+                cand = ' '.join(scr_match.group(0).split())
+                if cand.upper() != "S.C.R." and re.search(r'\d+', cand):
+                    metadata.case_number = cand
 
         # 2. Appellant and Respondent extraction
         # Try S.C.R. multi-line uppercase block first
@@ -123,7 +128,7 @@ class LegalMetadataExtractor:
                 app_cand = ' '.join(app_lines)
                 app_cand = re.sub(r'\s*\.{2,}.*$', '', app_cand).strip().strip('.')
                 app_cand = re.sub(r'\s*(?:Appellant|Petitioner).*$', '', app_cand, flags=re.IGNORECASE).strip()
-                if len(app_cand) > 3:
+                if len(app_cand) > 3 and not re.match(r'^(?:VERSUS|VS|S\.C\.R\.)$', app_cand, re.IGNORECASE):
                     metadata.appellant = app_cand
 
             # Get lines immediately following 'v.' up to end of party description
@@ -140,7 +145,7 @@ class LegalMetadataExtractor:
                 resp_cand = ' '.join(resp_lines)
                 resp_cand = re.sub(r'\s*\.{2,}.*$', '', resp_cand).strip().strip('.')
                 resp_cand = re.sub(r'\s*(?:Respondent|Defendant|Interveners?).*$', '', resp_cand, flags=re.IGNORECASE).strip()
-                if len(resp_cand) > 3:
+                if len(resp_cand) > 3 and not re.match(r'^(?:VERSUS|VS|S\.C\.R\.)$', resp_cand, re.IGNORECASE):
                     metadata.respondent = resp_cand
 
         # Fallback to single-line format: e.g. "Ram Krishna v. Secretary, Municipal Committee"
@@ -148,34 +153,40 @@ class LegalMetadataExtractor:
             single_vs = re.search(r'\n([A-Z\s,]{4,})\s+(?:v\.|vs\.|versus)\s+([A-Z\s,]{4,})(?:\.|\n)', plain_text, re.IGNORECASE)
             if single_vs:
                 if not metadata.appellant:
-                    metadata.appellant = ' '.join(single_vs.group(1).split())
+                    cand = ' '.join(single_vs.group(1).split())
+                    if not re.match(r'^(?:VERSUS|VS|S\.C\.R\.)$', cand, re.IGNORECASE):
+                        metadata.appellant = cand
                 if not metadata.respondent:
-                    metadata.respondent = ' '.join(single_vs.group(2).split())
+                    cand = ' '.join(single_vs.group(2).split())
+                    if not re.match(r'^(?:VERSUS|VS|S\.C\.R\.)$', cand, re.IGNORECASE):
+                        metadata.respondent = cand
 
-        # 3. Date of Judgment
+        # 3. Date of Judgment (Clean newlines and OCR noise first)
+        normalized_date_text = re.sub(r'\s+', ' ', plain_text)
         date_match = re.search(
             r'(?:DATED|Dated|DATED ON|DATED THIS|PRONOUNCED ON|DATE OF JUDGMENT)\s*[:\-]?\s*([0-9]{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+,?\s+[0-9]{4}|\d{1,2}[./-]\d{1,2}[./-]\d{4})',
-            plain_text,
+            normalized_date_text,
             re.IGNORECASE
         )
         if date_match:
             metadata.date_of_judgment = date_match.group(1).strip()
         else:
-            alt_date = re.search(
-                r'\b([0-9]{1,2}(?:st|nd|rd|th)?\s+(?:January|February|March|April|May|June|July|August|September|October|November|December),?\s+\d{4})\b',
-                plain_text,
+            # Match dates specifically in 1950s SCR format (e.g. "1950 March 14" or "March 14, 1950")
+            scr_date = re.search(
+                r'\b(\d{4}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2})\b',
+                normalized_date_text,
                 re.IGNORECASE
             )
-            if alt_date:
-                metadata.date_of_judgment = alt_date.group(1).strip()
+            if scr_date:
+                metadata.date_of_judgment = scr_date.group(1).strip()
             else:
-                alt_1950_date = re.search(
-                    r'\b(\d{4}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2})\b',
-                    plain_text,
+                alt_date = re.search(
+                    r'\b([0-9]{1,2}(?:st|nd|rd|th)?\s+(?:January|February|March|April|May|June|July|August|September|October|November|December),?\s+\d{4})\b',
+                    normalized_date_text,
                     re.IGNORECASE
                 )
-                if alt_1950_date:
-                    metadata.date_of_judgment = alt_1950_date.group(1).strip()
+                if alt_date:
+                    metadata.date_of_judgment = alt_date.group(1).strip()
 
         # 4. Judges / Coram
         judges: List[str] = []
@@ -218,12 +229,14 @@ class PageChunker:
         r'^(?:O\s*R\s*D\s*E\s*R|ORDER)$',
         r'^(?:BACKGROUND|FACTS\s+AND\s+BACKGROUND|FACTS|ISSUES|SUBMISSIONS(?:\s+OF\s+COUNSEL)?|ANALYSIS(?:\s+AND\s+CONCLUSION)?|DISCUSSION|CONCLUSION|VERDICT|OPERATIVE ORDER)$',
         r'^(?:PART\s+[A-Z0-9]+|SECTION\s+[A-Z0-9]+|POINT\s+[A-Z0-9]+)$',
-        r'^[A-Z\s.]+(?:C\.J\.|JJ\.|J\.)(?:\s*[-—:].*)?$',  # 1950s judicial opinion headers e.g. "FAZL ALI J. -"
     ]
 
     @classmethod
     def is_heading(cls, text: str) -> bool:
         clean = re.sub(r'^[#\s*]+', '', text).rstrip('*').strip().upper()
+        # Reject judge running headers from being treated as section headings
+        if re.search(r'(?:C\.J\.|JJ\.|J\.)$', clean):
+            return False
         for pat in cls.HEADING_PATTERNS:
             if re.match(pat, clean):
                 return True
@@ -305,6 +318,23 @@ class PageChunker:
                 # If a subpoint is itself a heading, update active heading
                 if cls.is_heading(sp_clean):
                     current_heading = cls.get_clean_heading(sp_clean)
+                    continue
+
+                # Filter out pure noise / running headers from becoming standalone chunks (Issue H4)
+                is_pure_noise = bool(re.match(
+                    r'^(?:VERSUS|VS\.?|V\.|v|\d+|\d+\s*SUPREME\s*COURT\s*REPORTS|\[?\d{4}\]?\s*S\.C\.R\.?)$',
+                    sp_clean,
+                    re.IGNORECASE
+                ))
+                if is_pure_noise:
+                    if chunks:
+                        chunks[-1].content += f"\n{sp_clean}"
+                    continue
+
+                # Merge very short unstructured fragments (<80 chars) into previous chunk unless it's a distinct numbered point
+                is_numbered_point = bool(re.match(r'^(?:\d+\.\s+|\[\d+\]\s+|\([a-z0-9]+\)\s+)', sp_clean))
+                if not is_numbered_point and len(sp_clean) < 80 and chunks and (len(chunks[-1].content) + len(sp_clean) < 1400):
+                    chunks[-1].content += f"\n{sp_clean}"
                     continue
 
                 chunk_id = f"{document_id}_p{page_number}_c{chunk_idx}"

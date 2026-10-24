@@ -43,8 +43,13 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Internal Team Handoffs & Meeting Drafts
+docs/handoffs/
+failed_sync_documents.json
+
 # Runtime State & Logs
 ingestion_state.json
 *.log
+
 
 
