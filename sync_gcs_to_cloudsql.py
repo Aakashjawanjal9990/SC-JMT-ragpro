@@ -290,11 +290,23 @@ class GCSCloudSQLSyncer:
 
 def main():
     parser = argparse.ArgumentParser(description="Sync GCS Chunk Deliverables directly into Cloud SQL PostgreSQL")
-    parser.add_argument("--db", required=True, help="PostgreSQL connection string (e.g. postgresql://postgres:PASSWORD@34.93.53.176:5432/scrag)")
-    parser.add_argument("--bucket", default="sc-judgments-rag-prod-data", help="GCS Bucket Name")
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
+    default_db = os.environ.get("DATABASE_URL")
+    parser.add_argument("--db", default=default_db, help="PostgreSQL connection string (defaults to DATABASE_URL in .env)")
+    parser.add_argument("--bucket", default=os.environ.get("GCS_BUCKET", "sc-judgments-rag-prod-data"), help="GCS Bucket Name")
     parser.add_argument("--year", type=int, default=None, help="Sync specific year (e.g. 1950)")
-    parser.add_argument("--workers", type=int, default=8, help="Parallel worker threads (default: 8)")
+    parser.add_argument("--workers", type=int, default=16, help="Parallel worker threads (default: 16)")
     args = parser.parse_args()
+
+    if not args.db:
+        print("\nERROR: No database connection string provided!")
+        print("Either pass --db 'postgresql://...' or set DATABASE_URL in your .env file.\n")
+        sys.exit(1)
 
     syncer = GCSCloudSQLSyncer(db_url=args.db, bucket_name=args.bucket)
     syncer.sync_all(year=args.year, workers=args.workers)
