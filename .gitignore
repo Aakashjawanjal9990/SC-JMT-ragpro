@@ -43,13 +43,12 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Internal Team Handoffs & Meeting Drafts
-docs/handoffs/
-failed_sync_documents.json
+# Documentation & Internal Specs (Preserved locally)
+docs/
 
-# Bulk local test PDFs (Production PDFs reside in GCS: gs://sc-judgments-rag-prod-data/)
-data/sample_pdfs/year=2025/
-data/sample_pdfs/year=2026/
+# Local Sample Data & PDFs (Stored in GCS)
+data/
+failed_sync_documents.json
 
 # Runtime State & Logs
 ingestion_state.json
