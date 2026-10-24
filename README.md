@@ -35,6 +35,7 @@ All architectural, security, database, and embedding specifications are neatly o
 
 | Document | Description |
 | :--- | :--- |
+| **[`docs/DATABASE_TABLES_AND_EMBEDDING_SPEC.md`](docs/DATABASE_TABLES_AND_EMBEDDING_SPEC.md)** | **Official 9-table schema (`scrag`), column constraints, chunk size rules, and Vertex AI embedding specs.** |
 | **[`docs/END_TO_END_PIPELINE_AND_ARCHITECTURE.md`](docs/END_TO_END_PIPELINE_AND_ARCHITECTURE.md)** | **Master end-to-end specification, work record, approach, and detailed Mermaid architecture diagram.** |
 | **[`docs/DATABASE_LOGGING_AND_AUDIT_SPEC.md`](docs/DATABASE_LOGGING_AND_AUDIT_SPEC.md)** | **Database log tables (`ingestion_runs`, `extraction_runs`, `chunk_embeddings`) and audit queries.** |
 | **[`docs/HOW_WE_DID_THE_EMBEDDING.md`](docs/HOW_WE_DID_THE_EMBEDDING.md)** | **Complete step-by-step guide on how vector embeddings are generated, normalized, and saved.** |
