@@ -47,6 +47,10 @@ Thumbs.db
 docs/handoffs/
 failed_sync_documents.json
 
+# Bulk local test PDFs (Production PDFs reside in GCS: gs://sc-judgments-rag-prod-data/)
+data/sample_pdfs/year=2025/
+data/sample_pdfs/year=2026/
+
 # Runtime State & Logs
 ingestion_state.json
 *.log

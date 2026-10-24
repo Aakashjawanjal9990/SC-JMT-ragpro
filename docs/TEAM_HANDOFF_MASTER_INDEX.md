@@ -24,9 +24,12 @@ Below is the directory of tailored handoff documents created for each team membe
 
 ## 2. Key Architecture Artifacts
 
-- **Production SQL Schema**: [`schema_cloudsql_pgvector.sql`](../schema_cloudsql_pgvector.sql)
+- **Final Master Architecture & Solutions Record**: [`docs/FINAL_ARCHITECTURE_AND_SOLUTIONS_RECORD.md`](FINAL_ARCHITECTURE_AND_SOLUTIONS_RECORD.md)
+- **Audit Rebuttal & Engineering Response Report**: [`docs/AUDIT_REBUTTAL_AND_ENGINEERING_RESPONSE_REPORT.md`](AUDIT_REBUTTAL_AND_ENGINEERING_RESPONSE_REPORT.md)
+- **Data Cleaning & Pre-Embedding Verification Spec**: [`docs/DATA_CLEANING_AND_PRE_EMBEDDING_VERIFICATION.md`](DATA_CLEANING_AND_PRE_EMBEDDING_VERIFICATION.md)
+- **Authoritative 20-Table SQL Contract**: [`legal_rag_cloudsql_postgresql_schema.sql`](../legal_rag_cloudsql_postgresql_schema.sql)
 - **Embedding Architecture Guide**: [`docs/HOW_WE_DID_THE_EMBEDDING.md`](HOW_WE_DID_THE_EMBEDDING.md)
 - **Database Logging & Audit Spec**: [`docs/DATABASE_LOGGING_AND_AUDIT_SPEC.md`](DATABASE_LOGGING_AND_AUDIT_SPEC.md)
 - **Cloud Run Deployment Script**: [`deploy_cloud_run.sh`](../deploy_cloud_run.sh)
 - **Container Definition**: [`Dockerfile`](../Dockerfile) (Python 3.11 Non-Root)
-- **Automated Tests**: [`tests/test_ingestion.py`](../tests/test_ingestion.py) (9 Tests Passing)
+- **Automated Regression Tests**: [`tests/test_db_loader_strict.py`](../tests/test_db_loader_strict.py) & [`tests/test_ingestion.py`](../tests/test_ingestion.py) (12 Tests Passing)

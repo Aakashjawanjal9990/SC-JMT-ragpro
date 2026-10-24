@@ -60,11 +60,22 @@ class LegalTextCleaner:
         # 1. Fix line-break hyphenation (e.g. "repre- \nsentative" -> "representative")
         text = re.sub(r'(\b[A-Za-z]+)-\s*\n\s*([A-Za-z]+\b)', r'\1\2', text)
 
-        # 2. Fix OCR substitutions
+        # 2. Strip recurring historical S.C.R. running page headers (including OCR typos like 'OOURT', 'SUPR!!:ME', 'COUR1'')
+        text = re.sub(
+            r'(?:^|\n)\s*(?:[-•,;~`\'\s]*\n)*\s*'
+            r'(?:(?:S\.?C\.?R\.?|\[?\d{4}\]?|\d{1,4})\s*\n\s*)?'
+            r'(?:SUPR[E!]+ME\s+[CO0]{1,2}UR[T1\']+\s+REPORTS?)\s*\n\s*'
+            r'(?:(?:S\.?C\.?R\.?|\[?\d{4}\]?|\d{1,4})\s*\n)*',
+            '\n',
+            text,
+            flags=re.IGNORECASE
+        )
+
+        # 3. Fix OCR substitutions
         for pattern, replacement in OCR_REPLACEMENTS:
             text = re.sub(pattern, replacement, text)
 
-        # 3. Normalize carriage returns
+        # 4. Normalize carriage returns
         text = text.replace('\r\n', '\n').replace('\r', '\n')
 
         # Replace 3+ consecutive newlines with 2
