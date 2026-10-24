@@ -31,6 +31,7 @@ def error_response(
         "message": message,
         "retryable": retryable,
     }
+
     if details:
         error["details"] = details
 
@@ -50,14 +51,19 @@ def _safe_validation_message(field: str, error_type: str) -> str:
         if field == "question":
             return "A question is required."
         return "This field is required."
+
     if error_type in {"string_too_short", "too_short"}:
         return "This field is too short."
+
     if error_type in {"string_too_long", "too_long"}:
         return "This field is too long."
+
     if error_type == "string_pattern_mismatch":
         return "This field has an invalid format."
+
     if error_type == "extra_forbidden":
         return "This field is not allowed."
+
     return "This field has an invalid value."
 
 
@@ -105,12 +111,42 @@ async def http_exception_handler(
     request: Request,
     exc: StarletteHTTPException,
 ) -> JSONResponse:
-    """Map known HTTP failures to the shared error envelope."""
+    """Preserve HTTP status codes and return safe, consistent error responses."""
     known_errors = {
+        400: ("BAD_REQUEST", "The request is invalid.", False),
         401: ("UNAUTHORIZED", "Authentication is required or invalid.", False),
-        403: ("FORBIDDEN", "You are not permitted to perform this action.", False),
+        403: (
+            "FORBIDDEN",
+            "You are not permitted to perform this action.",
+            False,
+        ),
         404: ("NOT_FOUND", "The requested resource was not found.", False),
+        405: (
+            "METHOD_NOT_ALLOWED",
+            "The HTTP method is not allowed for this endpoint.",
+            False,
+        ),
+        409: (
+            "CONFLICT",
+            "The request conflicts with the current resource state.",
+            False,
+        ),
+        413: (
+            "PAYLOAD_TOO_LARGE",
+            "The request payload is too large.",
+            False,
+        ),
+        415: (
+            "UNSUPPORTED_MEDIA_TYPE",
+            "The request media type is not supported.",
+            False,
+        ),
         422: ("VALIDATION_ERROR", "The request is invalid.", False),
+        429: (
+            "TOO_MANY_REQUESTS",
+            "Too many requests. Please try again later.",
+            True,
+        ),
         503: (
             "SERVICE_UNAVAILABLE",
             "A required service is temporarily unavailable.",
@@ -120,15 +156,12 @@ async def http_exception_handler(
 
     code, message, retryable = known_errors.get(
         exc.status_code,
-        ("INTERNAL_ERROR", "An unexpected server error occurred.", False),
+        ("HTTP_ERROR", "The request could not be completed.", False),
     )
-
-    # Preserve only the defined contract status codes.
-    status_code = exc.status_code if exc.status_code in known_errors else 500
 
     return error_response(
         request,
-        status_code=status_code,
+        status_code=exc.status_code,
         code=code,
         message=message,
         retryable=retryable,

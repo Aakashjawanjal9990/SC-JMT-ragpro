@@ -101,3 +101,15 @@ def test_validation_error_does_not_expose_submitted_values() -> None:
     assert response.status_code == 422
     assert secret_value not in response.text
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_method_not_allowed_preserves_405_status() -> None:
+    client = TestClient(create_app())
+
+    response = client.post("/health")
+
+    assert response.status_code == 405
+    body = response.json()
+    assert body["error"]["code"] == "METHOD_NOT_ALLOWED"
+    assert body["error"]["retryable"] is False
+    assert body["request_id"]
