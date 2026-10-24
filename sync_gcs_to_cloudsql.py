@@ -47,17 +47,41 @@ class GCSCloudSQLSyncer:
         self.verify_connection()
 
     def verify_connection(self):
-        """Verifies database connectivity and checks extensions."""
-        with self.engine.connect() as conn:
+        """Verifies database connectivity, aligns schema with pgvector, and registers embedding model."""
+        with self.engine.begin() as conn:
             res = conn.execute(text("SELECT current_database(), current_user;")).fetchone()
             logger.info(f"Connected to Cloud SQL PostgreSQL: DB='{res[0]}', User='{res[1]}'")
             
-            # Ensure vector extension is enabled
+            # 1. Enable pgvector extension
             try:
                 conn.execute(text('CREATE EXTENSION IF NOT EXISTS "vector";'))
-                conn.execute(text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'))
+                logger.info("Extension 'vector' enabled successfully.")
             except Exception as e:
-                logger.warning(f"Extension check note: {e}")
+                logger.warning(f"Could not enable extension 'vector': {e}")
+
+            # 2. Add pgvector and chunk_id columns to chunks table if missing from Anuradha's schema
+            try:
+                conn.execute(text('ALTER TABLE chunks ADD COLUMN IF NOT EXISTS chunk_id TEXT;'))
+                conn.execute(text('ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding VECTOR(768);'))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_chunks_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);'))
+                logger.info("Verified chunks table: chunk_id and embedding VECTOR(768) columns are ready.")
+            except Exception as e:
+                logger.warning(f"Schema alignment note for chunks: {e}")
+
+            # 3. Seed Vertex AI text-embedding-004 in embedding_models
+            try:
+                model_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, "scj.model.vertex_ai.text-embedding-004.v1"))
+                conn.execute(text("""
+                    INSERT INTO embedding_models (
+                        embedding_model_uuid, model_id, provider, version, dimensions, is_active
+                    ) VALUES (
+                        :m_uuid, 'text-embedding-004', 'vertex_ai', 'v1', 768, TRUE
+                    )
+                    ON CONFLICT (provider, model_id, version) DO NOTHING;
+                """), {"m_uuid": model_uuid})
+                logger.info("Registered 'text-embedding-004' (768 dimensions) in embedding_models.")
+            except Exception as e:
+                logger.warning(f"Model registration note: {e}")
 
     def load_single_chunk_file(self, blob_name: str) -> Dict[str, Any]:
         """Downloads a single _chunks.json from GCS and inserts into Cloud SQL."""
@@ -139,7 +163,7 @@ class GCSCloudSQLSyncer:
                         :chunk_index, :page_start, :page_end, :content, :section,
                         :metadata, :content_sha256, TRUE, :embedding
                     )
-                    ON CONFLICT (chunk_id) DO UPDATE SET
+                    ON CONFLICT (source_file_uuid, chunk_index) DO UPDATE SET
                         content = EXCLUDED.content,
                         embedding = EXCLUDED.embedding,
                         updated_at = CURRENT_TIMESTAMP;
@@ -147,6 +171,8 @@ class GCSCloudSQLSyncer:
 
                 chunk_records = []
                 chunk_embeddings_records = []
+                model_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, "scj.model.vertex_ai.text-embedding-004.v1"))
+
                 for idx, c in enumerate(chunks_data, 1):
                     c_id = c.get("chunk_id") or f"{doc_id}_c{idx}"
                     c_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"scj.chunk.{c_id}"))
@@ -183,6 +209,7 @@ class GCSCloudSQLSyncer:
                         chunk_embeddings_records.append({
                             "ce_uuid": str(uuid.uuid5(uuid.NAMESPACE_DNS, f"scj.embed.{c_id}")),
                             "chunk_uuid": c_uuid,
+                            "model_uuid": model_uuid,
                             "provider": "vertex_ai",
                             "vector_store": "pgvector",
                             "sync_status": "SYNCED"
@@ -196,9 +223,11 @@ class GCSCloudSQLSyncer:
                 if chunk_embeddings_records:
                     insert_ce_sql = text("""
                         INSERT INTO chunk_embeddings (
-                            chunk_embedding_uuid, chunk_uuid, provider, vector_store, sync_status
+                            chunk_embedding_uuid, chunk_uuid, embedding_model_uuid,
+                            provider, vector_store, sync_status
                         ) VALUES (
-                            :ce_uuid, :chunk_uuid, :provider, :vector_store, :sync_status
+                            :ce_uuid, :chunk_uuid, :model_uuid,
+                            :provider, :vector_store, :sync_status
                         )
                         ON CONFLICT (chunk_uuid, embedding_model_uuid) DO NOTHING;
                     """)
@@ -273,3 +302,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
