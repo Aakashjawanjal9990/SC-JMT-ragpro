@@ -41,6 +41,7 @@ ENV/
 Thumbs.db
 .vscode/
 .idea/
+*tempCodeRunnerFile*
 
 # Local Outputs & Data Folders (STRICTLY EXCLUDED FROM GIT)
 output/
@@ -53,3 +54,6 @@ tests/fixtures/
 ingestion_state.json
 failed_sync_documents.json
 local_vector_store.json
+
+# Local Retrieval & QA Test Harness (EXCLUDED FROM PRODUCTION GIT)
+retrieval/

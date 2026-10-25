@@ -14,11 +14,18 @@ from pathlib import Path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
-from PCEV2.config import config
-from PCEV2.storage.init_db import init_database
-from PCEV2.pipeline import IngestionPipeline
-from PCEV2.check_gates import check_all_gates
-from PCEV2.storage.gcs_loader import GCSDataLoader
+try:
+    from config import config
+    from storage.init_db import init_database
+    from pipeline import IngestionPipeline
+    from check_gates import check_all_gates
+    from storage.gcs_loader import GCSDataLoader
+except ImportError:
+    from PCEV2.config import config
+    from PCEV2.storage.init_db import init_database
+    from PCEV2.pipeline import IngestionPipeline
+    from PCEV2.check_gates import check_all_gates
+    from PCEV2.storage.gcs_loader import GCSDataLoader
 
 
 def main():
@@ -101,4 +108,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
