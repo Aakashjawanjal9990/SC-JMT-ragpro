@@ -53,6 +53,14 @@ function errorMessage(data, status) {
       .join(' ');
   } else if (typeof data?.message === 'string') {
     text = data.message;
+  } else if (data?.error) {
+    // Backend envelope: {request_id, error: {code, message, details: [{message}]}}
+    const fieldMessages = Array.isArray(data.error.details)
+      ? data.error.details.map((d) => d?.message).filter(Boolean)
+      : [];
+    text = fieldMessages.length
+      ? fieldMessages.join(' ')
+      : data.error.message || '';
   }
   return text.trim().slice(0, 200) || GENERIC_ERROR;
 }
@@ -100,6 +108,41 @@ async function request(path, { method = 'GET', body } = {}) {
 
 const post = (path, body) => request(path, { method: 'POST', body });
 
+const NO_ANSWER =
+  'I could not find enough support in the judgments to answer this. Try rephrasing or adding detail.';
+
+const pageLabel = (pages) =>
+  pages.length === 1
+    ? String(pages[0])
+    : `${pages[0]}-${pages[pages.length - 1]}`;
+
+/** Accepts the frontend shape or the backend's citations shape. */
+function normalizeQueryResponse(res) {
+  let sources = res.sources;
+  if (!sources && Array.isArray(res.citations)) {
+    const byCase = new Map(); // one chip per judgment, pages merged
+    for (const c of res.citations) {
+      const name = c.case_name || c.judgment_title || c.citation || 'Judgment';
+      const entry = byCase.get(name) || {
+        case: name,
+        year: c.decision_date ? String(c.decision_date).slice(0, 4) : '',
+        pages: new Set(),
+      };
+      (c.original_page_numbers || []).forEach((p) => entry.pages.add(p));
+      byCase.set(name, entry);
+    }
+    sources = [...byCase.values()].map(({ pages, ...rest }) => ({
+      ...rest,
+      page: pages.size ? pageLabel([...pages].sort((a, b) => a - b)) : '-',
+    }));
+  }
+  return {
+    conversationId: res.conversationId,
+    answer: res.answer?.trim() || NO_ANSWER,
+    sources: sources || [],
+  };
+}
+
 async function queryWithInterpretation(question, conversationId, think) {
   let interpretation;
   try {
@@ -118,7 +161,7 @@ async function queryWithInterpretation(question, conversationId, think) {
       sources: [],
     };
   }
-  return post('/chat/query', {
+  const res = await post('/chat/query', {
     question,
     conversationId,
     think,
@@ -130,6 +173,7 @@ async function queryWithInterpretation(question, conversationId, think) {
     clarificationNeeded: false,
     clarificationQuestion: '',
   });
+  return normalizeQueryResponse(res);
 }
 
 export const api = {

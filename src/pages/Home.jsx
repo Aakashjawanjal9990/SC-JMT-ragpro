@@ -125,9 +125,10 @@ export default function Home() {
           {chat.messages.map((m, i) => (
             <div key={i} className={`msg ${m.role} ${m.error ? 'err' : ''}`}>
               <p>{m.text}</p>
-              {m.sources?.map((s) => (
-                <span key={s.case} className="src">
-                  {s.case} ({s.year}), p. {s.page}
+              {m.sources?.map((s, j) => (
+                <span key={`${s.case}-${j}`} className="src">
+                  {s.case}
+                  {s.year ? ` (${s.year})` : ''}, p. {s.page}
                 </span>
               ))}
             </div>

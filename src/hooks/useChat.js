@@ -21,19 +21,21 @@ export default function useChat() {
       setMessages((prev) => [...prev, { role: 'user', text: question }]);
       try {
         const res = await api.query(question, conversationId, think);
-        setConversationId(res.conversationId);
+        if (res.conversationId !== null) {
+          setConversationId(res.conversationId);
+          setConversations((prev) =>
+            prev.some((c) => c.id === res.conversationId)
+              ? prev
+              : [
+                  { id: res.conversationId, title: question.slice(0, 48) },
+                  ...prev,
+                ],
+          );
+        }
         setMessages((prev) => [
           ...prev,
           { role: 'assistant', text: res.answer, sources: res.sources },
         ]);
-        setConversations((prev) =>
-          prev.some((c) => c.id === res.conversationId)
-            ? prev
-            : [
-                { id: res.conversationId, title: question.slice(0, 48) },
-                ...prev,
-              ],
-        );
       } catch (err) {
         setMessages((prev) => [
           ...prev,
