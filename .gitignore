@@ -14,3 +14,4 @@ dist/
 *.zip
 test_server.py
 test_server_cookies.py   
+docs/

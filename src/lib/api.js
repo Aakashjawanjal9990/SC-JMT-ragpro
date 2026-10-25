@@ -2,17 +2,26 @@
 // over fetch.
 //
 // Sign-in is an HttpOnly session cookie set by the backend. This code never
-// sees, stores or sends a token: the browser attaches the cookie itself
-// because every request uses `credentials: 'include'`.
+// sees or stores the session: the browser attaches the cookie itself because
+// every request uses `credentials: 'include'`.
+//
+// CSRF: login and /auth/me return a `csrfToken` in the JSON body. It is kept
+// in memory only (never localStorage, sessionStorage or a cookie) and sent as
+// `X-CSRF-Token` on every state-changing request.
 
 const BASE = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 const TIMEOUT_MS = 60000;
 
-// CSRF: state-changing requests echo the backend's CSRF token in a header.
-// Names are configurable so they can match whatever the backend settles on.
-const CSRF_HEADER = import.meta.env.VITE_CSRF_HEADER || 'X-CSRF-Token';
-const CSRF_COOKIE = import.meta.env.VITE_CSRF_COOKIE || 'csrf_token';
+const CSRF_HEADER = 'X-CSRF-Token';
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+// Agreed backend endpoints for archiving. Change them here if the backend
+// contract changes; nothing else in the app builds these URLs.
+const ARCHIVE_PATH = (id) =>
+  `/chat/conversations/${encodeURIComponent(id)}/archive`; // POST
+const RESTORE_PATH = (id) =>
+  `/chat/conversations/${encodeURIComponent(id)}/restore`; // POST
+const ARCHIVED_LIST_PATH = '/chat/conversations?archived=true'; // GET
 
 // A 401 from these paths is an ordinary answer (wrong password, nobody signed
 // in yet), not "your session ended", so it must not trigger a sign-out.
@@ -33,18 +42,15 @@ if (!BASE && import.meta.env.DEV) {
   console.error('VITE_API_URL is not set. Copy .env.example to .env.');
 }
 
-// The CSRF token is not a secret from scripts on this page (that is the
-// point of the double-submit pattern), so keeping it in memory is fine.
-let csrfFromHeader = '';
+// In-memory CSRF tokens. A page reload clears them; AuthProvider calls
+// /auth/me on every load, which brings the token back. Users and admins have
+// separate sessions, so each keeps its own token.
+const csrf = { user: '', admin: '' };
 
-function csrfToken() {
-  const hit = document.cookie
-    .split('; ')
-    .find((part) => part.startsWith(`${CSRF_COOKIE}=`));
-  const fromCookie = hit
-    ? decodeURIComponent(hit.slice(CSRF_COOKIE.length + 1))
-    : '';
-  return fromCookie || csrfFromHeader;
+function rememberCsrf(scope, data) {
+  if (typeof data?.csrfToken === 'string' && data.csrfToken) {
+    csrf[scope] = data.csrfToken;
+  }
 }
 
 /**
@@ -83,7 +89,8 @@ function errorMessage(data, status) {
 
 async function request(path, { method = 'GET', body } = {}) {
   const isAdmin = path.startsWith('/admin');
-  const csrf = SAFE_METHODS.has(method) ? '' : csrfToken();
+  const scope = isAdmin ? 'admin' : 'user';
+  const token = SAFE_METHODS.has(method) ? '' : csrf[scope];
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   let res;
@@ -94,7 +101,7 @@ async function request(path, { method = 'GET', body } = {}) {
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
-        ...(csrf && { [CSRF_HEADER]: csrf }),
+        ...(token && { [CSRF_HEADER]: token }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -107,11 +114,11 @@ async function request(path, { method = 'GET', body } = {}) {
   } finally {
     clearTimeout(timer);
   }
-  // Needs the backend to expose the header to the browser (CORS).
-  csrfFromHeader = res.headers.get(CSRF_HEADER) || csrfFromHeader;
   const data = await res.json().catch(() => ({}));
+  if (res.ok) rememberCsrf(scope, data);
   // A 401 anywhere else means the session cookie is missing or has expired.
   if (res.status === 401 && !PLAIN_401.has(path)) {
+    csrf[scope] = '';
     window.dispatchEvent(
       new Event(isAdmin ? 'nm:admin-unauthorized' : 'nm:unauthorized'),
     );
@@ -203,8 +210,21 @@ export const api = {
   resend: (email) => post('/auth/resend', { email }),
   forgot: (email) => post('/auth/forgot', { email }),
   reset: (payload) => post('/auth/reset', payload),
-  me: () => request('/auth/me'),
-  logout: () => post('/auth/logout', {}),
+  // /auth/me returns the user (optionally with `csrfToken`, and optionally
+  // wrapped as {user, csrfToken}). The token is stripped so it never ends
+  // up in React state.
+  me: async () => {
+    const { csrfToken: _token, user, ...rest } = await request('/auth/me');
+    return user || rest;
+  },
+  hasCsrfToken: () => Boolean(csrf.user),
+  logout: async () => {
+    try {
+      return await post('/auth/logout', {});
+    } finally {
+      csrf.user = '';
+    }
+  },
 
   // Chat
   query: (question, conversationId, think = false) =>
@@ -212,15 +232,20 @@ export const api = {
   conversations: () => request('/chat/conversations'),
   conversation: (id) =>
     request(`/chat/conversations/${encodeURIComponent(id)}`),
-  deleteConversation: (id) =>
-    request(`/chat/conversations/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-    }),
+  archivedConversations: () => request(ARCHIVED_LIST_PATH),
+  archiveConversation: (id) => post(ARCHIVE_PATH(id), {}),
+  restoreConversation: (id) => post(RESTORE_PATH(id), {}),
 
   // Admin
   adminLogin: (username, password) =>
     post('/admin/login', { username, password }),
-  adminLogout: () => post('/admin/logout', {}),
+  adminLogout: async () => {
+    try {
+      return await post('/admin/logout', {});
+    } finally {
+      csrf.admin = '';
+    }
+  },
   adminUsers: ({ page, pageSize, status, search }) => {
     const qs = new URLSearchParams({ page, pageSize, status, search });
     return request(`/admin/users?${qs}`);

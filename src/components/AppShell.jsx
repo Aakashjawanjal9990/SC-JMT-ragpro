@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  Archive,
   Check,
   LogOut,
   Menu,
@@ -10,7 +11,6 @@ import {
   Plus,
   Search,
   Share2,
-  Trash2,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import useSidebarPrefs from '../hooks/useSidebarPrefs';
@@ -25,7 +25,9 @@ export default function AppShell({
   activeId = null,
   onNew,
   onSelect,
-  onDelete,
+  onArchive,
+  onShowArchived,
+  showingArchived = false,
   children,
 }) {
   const { user, logout } = useAuth();
@@ -63,16 +65,9 @@ export default function AppShell({
     navigate('/', { replace: true });
   };
 
-  const deleteChat = async (c) => {
-    const title = c.title || 'Untitled research';
-    if (
-      !window.confirm(
-        `Delete "${title}" permanently?\n\nThis cannot be undone.`,
-      )
-    )
-      return;
+  const archiveChat = async (c) => {
     try {
-      await onDelete?.(c.id);
+      await onArchive?.(c.id);
     } catch (err) {
       window.alert(err.message);
     }
@@ -103,11 +98,11 @@ export default function AppShell({
         </button>
         <button
           className="row-action"
-          aria-label="Delete research"
-          title="Delete"
-          onClick={() => deleteChat(c)}
+          aria-label="Archive research"
+          title="Archive"
+          onClick={() => archiveChat(c)}
         >
-          <Trash2 size={13} />
+          <Archive size={13} />
         </button>
       </div>
     );
@@ -188,6 +183,18 @@ export default function AppShell({
           </p>
         )}
         {recentList.map(renderRow)}
+
+        <div className="sidefoot">
+          <button
+            className={`sidelink ${showingArchived ? 'active' : ''}`}
+            onClick={() => {
+              setOpen(false);
+              onShowArchived?.();
+            }}
+          >
+            <Archive size={14} /> Archived chats
+          </button>
+        </div>
       </aside>
 
       <main className="shell-main">

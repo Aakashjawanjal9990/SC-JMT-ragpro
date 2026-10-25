@@ -7,6 +7,11 @@ export default function useChat() {
   const [conversations, setConversations] = useState([]);
   const [conversationId, setConversationId] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Archived chats are fetched only when the Archived view is opened.
+  const [archived, setArchived] = useState([]);
+  // Status: idle, loading, ready or error.
+  const [archivedStatus, setArchivedStatus] = useState('idle');
+  const [archivedError, setArchivedError] = useState('');
 
   useEffect(() => {
     api
@@ -62,14 +67,53 @@ export default function useChat() {
     }
   }, []);
 
-  const remove = useCallback(async (id) => {
+  // Hides the chat from the sidebar. The backend keeps its messages.
+  const archive = useCallback(
+    async (id) => {
+      await api.archiveConversation(id);
+      const chat = conversations.find((c) => String(c.id) === String(id));
+      setConversations((prev) =>
+        prev.filter((c) => String(c.id) !== String(id)),
+      );
+      if (chat) {
+        setArchived((prev) =>
+          prev.some((c) => String(c.id) === String(id))
+            ? prev
+            : [chat, ...prev],
+        );
+      }
+    },
+    [conversations],
+  );
+
+  const loadArchived = useCallback(async () => {
+    setArchivedStatus('loading');
+    setArchivedError('');
     try {
-      await api.deleteConversation(id);
+      setArchived(await api.archivedConversations());
+      setArchivedStatus('ready');
     } catch (err) {
-      if (err.status !== 404) throw err; // 404 means it is already gone
+      setArchivedError(err.message);
+      setArchivedStatus('error');
     }
-    setConversations((prev) => prev.filter((c) => String(c.id) !== String(id)));
   }, []);
+
+  // Puts an archived chat back in the sidebar.
+  const restore = useCallback(
+    async (id) => {
+      await api.restoreConversation(id);
+      const chat = archived.find((c) => String(c.id) === String(id));
+      setArchived((prev) => prev.filter((c) => String(c.id) !== String(id)));
+      if (chat) {
+        setConversations((prev) =>
+          prev.some((c) => String(c.id) === String(id))
+            ? prev
+            : [chat, ...prev],
+        );
+      }
+    },
+    [archived],
+  );
 
   return {
     messages,
@@ -79,6 +123,11 @@ export default function useChat() {
     send,
     reset,
     open,
-    remove,
+    archive,
+    archived,
+    archivedStatus,
+    archivedError,
+    loadArchived,
+    restore,
   };
 }
