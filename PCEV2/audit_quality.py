@@ -10,7 +10,10 @@ import math
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from PCEV2.config import config
+try:
+    from PCEV2.config import config
+except ImportError:
+    from config import config
 
 
 def estimate_tokens(text: str) -> int:

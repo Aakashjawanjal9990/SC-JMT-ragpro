@@ -1,0 +1,53 @@
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Service Account Keys & Secrets
+*.pem
+*.key
+*.pfx
+*.p12
+*sa-key*.json
+*credential*.json
+*service-account*.json
+*secret*.json
+client_secrets*.json
+
+# Databases & SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Test & Coverage Cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local Outputs & Data Folders (STRICTLY EXCLUDED FROM GIT)
+output/
+o_p/
+data/
+*.pdf
+*.log
+ingestion_state.json
+failed_sync_documents.json
+local_vector_store.json

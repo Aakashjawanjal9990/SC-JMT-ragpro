@@ -6,7 +6,10 @@ Classifies physical zones (headers, margins, body, footnotes) using PyMuPDF dict
 import re
 import unicodedata
 from typing import List, Tuple, Optional, Any
-from PCEV2.core.models import ExtractedPageZones
+try:
+    from PCEV2.core.models import ExtractedPageZones
+except ImportError:
+    from core.models import ExtractedPageZones
 
 
 class CoordinateZoneExtractor:

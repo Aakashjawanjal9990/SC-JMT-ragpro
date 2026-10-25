@@ -5,8 +5,12 @@ Enforces Rule R2 (page_start == page_end), continuity flags, and ORDER isolation
 
 import re
 from typing import List, Optional, Tuple
-from PCEV2.core.models import ChunkRecord, ChunkMetadata
-from PCEV2.parsing.structure_tracker import LawReportStructureTracker
+try:
+    from PCEV2.core.models import ChunkRecord, ChunkMetadata
+    from PCEV2.parsing.structure_tracker import LawReportStructureTracker
+except ImportError:
+    from core.models import ChunkRecord, ChunkMetadata
+    from parsing.structure_tracker import LawReportStructureTracker
 
 
 class PageChunker:

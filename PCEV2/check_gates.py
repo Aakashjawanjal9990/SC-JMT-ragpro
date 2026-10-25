@@ -15,8 +15,12 @@ from sqlalchemy import create_engine, text
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
-from PCEV2.config import config
-from PCEV2.audit_quality import QualityAuditor, generate_review_sheet_csv
+try:
+    from PCEV2.config import config
+    from PCEV2.audit_quality import QualityAuditor, generate_review_sheet_csv
+except ImportError:
+    from config import config
+    from audit_quality import QualityAuditor, generate_review_sheet_csv
 
 
 def check_all_gates(chunks_dir: Path = config.chunks_dir, db_url: str = config.database_url) -> Dict[str, Any]:

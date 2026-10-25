@@ -7,8 +7,12 @@ import os
 import math
 import hashlib
 from typing import List, Optional
-from PCEV2.core.models import ChunkRecord
-from PCEV2.config import config
+try:
+    from PCEV2.core.models import ChunkRecord
+    from PCEV2.config import config
+except ImportError:
+    from core.models import ChunkRecord
+    from config import config
 
 
 def build_short_embedding_text(

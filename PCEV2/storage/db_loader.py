@@ -12,8 +12,12 @@ from typing import List, Optional
 import sqlalchemy as sa
 from sqlalchemy import create_engine, text
 
-from PCEV2.core.models import DocumentRecord, ChunkRecord
-from PCEV2.config import config
+try:
+    from PCEV2.core.models import DocumentRecord, ChunkRecord
+    from PCEV2.config import config
+except ImportError:
+    from core.models import DocumentRecord, ChunkRecord
+    from config import config
 
 
 class DatabaseLoader:

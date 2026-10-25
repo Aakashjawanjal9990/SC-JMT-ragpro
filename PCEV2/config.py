@@ -20,9 +20,11 @@ class PipelineConfig:
     vector_mode: str = os.getenv("VECTOR_MODE", "external")
     allow_mock_embeddings: bool = os.getenv("ALLOW_MOCK_EMBEDDINGS", "true").lower() == "true"
     
-    # Vertex AI Embedding
+    # Google Cloud Platform (GCP) & GCS
     gcp_project: str = os.getenv("GCP_PROJECT", "sc-judgments-rag-prod")
     gcp_location: str = os.getenv("GCP_LOCATION", "us-central1")
+    gcs_bucket: str = os.getenv("GCS_BUCKET", "sc-judgments-rag-prod-data")
+    gcs_prefix: str = os.getenv("GCS_PREFIX", "raw_pdfs/pdfs")
     embedding_model_id: str = "text-embedding-004"
     embedding_dimension: int = 768
     batch_size: int = 64

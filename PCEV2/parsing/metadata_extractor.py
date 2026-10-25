@@ -5,7 +5,10 @@ Extracts citation, docket, dates, bench, author (*), citations, and counsel from
 
 import re
 from typing import List, Dict, Any, Optional
-from PCEV2.core.models import PageMetadata
+try:
+    from PCEV2.core.models import PageMetadata
+except ImportError:
+    from core.models import PageMetadata
 
 
 class LegalMetadataExtractor:

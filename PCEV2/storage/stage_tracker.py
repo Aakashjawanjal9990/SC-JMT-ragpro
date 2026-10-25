@@ -9,7 +9,10 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from PCEV2.config import config
+try:
+    from PCEV2.config import config
+except ImportError:
+    from config import config
 
 
 class DocumentStageTracker:

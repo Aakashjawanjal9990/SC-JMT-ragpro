@@ -8,14 +8,24 @@ import pytest
 from pathlib import Path
 import fitz
 
-from PCEV2.core.models import ChunkRecord, ChunkMetadata
-from PCEV2.parsing.zone_extractor import CoordinateZoneExtractor
-from PCEV2.parsing.case_boundaries import CaseBoundaryDetector
-from PCEV2.parsing.metadata_extractor import LegalMetadataExtractor
-from PCEV2.parsing.structure_tracker import LawReportStructureTracker
-from PCEV2.chunking.page_chunker import PageChunker
-from PCEV2.pipeline import IngestionPipeline
-from PCEV2.config import config
+try:
+    from PCEV2.core.models import ChunkRecord, ChunkMetadata
+    from PCEV2.parsing.zone_extractor import CoordinateZoneExtractor
+    from PCEV2.parsing.case_boundaries import CaseBoundaryDetector
+    from PCEV2.parsing.metadata_extractor import LegalMetadataExtractor
+    from PCEV2.parsing.structure_tracker import LawReportStructureTracker
+    from PCEV2.chunking.page_chunker import PageChunker
+    from PCEV2.pipeline import IngestionPipeline
+    from PCEV2.config import config
+except ImportError:
+    from core.models import ChunkRecord, ChunkMetadata
+    from parsing.zone_extractor import CoordinateZoneExtractor
+    from parsing.case_boundaries import CaseBoundaryDetector
+    from parsing.metadata_extractor import LegalMetadataExtractor
+    from parsing.structure_tracker import LawReportStructureTracker
+    from chunking.page_chunker import PageChunker
+    from pipeline import IngestionPipeline
+    from config import config
 
 
 def test_zone_extractor_margins_1950():
