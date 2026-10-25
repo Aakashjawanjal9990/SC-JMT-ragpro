@@ -148,6 +148,15 @@ class RetrievalPortAdapter:
             timeout_seconds=settings.timeout_seconds,
         )
 
+    def warmup(self) -> None:
+        """Load the embedding (and reranker, if enabled) models at startup and check the
+        query vector dimension, so the first request does not pay for it."""
+        self._retriever.warmup()
+
+    def close(self) -> None:
+        """Release database connections; call on application shutdown."""
+        self._retriever.close()
+
     async def retrieve(self, question: str, filters: Any, limit: int) -> Sequence[Any]:
         spec = filters_from_query(filters)
         if limit < 1:
