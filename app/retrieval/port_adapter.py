@@ -37,7 +37,7 @@ from app.retrieval.errors import (
     UnsupportedFilterError,
 )
 from app.retrieval.filters import Filters
-from app.retrieval.hybrid import HybridRetriever
+from app.retrieval.hybrid import HybridRetriever, RetrievalResult
 from app.retrieval.models import (
     DECISION_DATE,
     DOCUMENT_ID,
@@ -153,9 +153,9 @@ class RetrievalPortAdapter:
         if limit < 1:
             return []
         try:
-            chunks = await asyncio.wait_for(
+            result: RetrievalResult = await asyncio.wait_for(
                 asyncio.to_thread(
-                    self._retriever.retrieve, question, top_k=limit, filters=spec or None
+                    self._retriever.search, question, top_k=limit, filters=spec or None
                 ),
                 timeout=self._timeout_seconds,
             )
@@ -166,18 +166,38 @@ class RetrievalPortAdapter:
         except Exception as exc:
             raise RetrievalFailure("Retrieval dependency failed") from exc
 
-        passages: list[Any] = []
-        seen: set[str] = set()
-        rejected = 0
-        for chunk in chunks[:limit]:
-            fields = passage_fields(chunk, rank=len(passages) + 1)
-            if fields is None or fields["chunk_id"] in seen:
-                rejected += 1
-                continue
-            seen.add(fields["chunk_id"])
-            passages.append(self._passage_factory(**fields))
-        if rejected:
-            logger.warning("Dropped %d retrieved chunks that failed integrity checks", rejected)
-            if not passages:
-                raise RetrievalFailure("All retrieved chunks failed integrity checks")
-        return passages
+        # Stage timings only; the question and passage text are never logged.
+        logger.debug("Retrieval mode=%s timings_ms=%s", result.mode, result.timings_ms)
+        return passages_from_result(result, limit, self._passage_factory)
+
+
+def passages_from_result(
+    result: RetrievalResult,
+    limit: int,
+    passage_factory: Callable[..., Any] = dict,
+) -> list[Any]:
+    """Convert RetrievalResult.chunks into the backend's RetrievedPassage format:
+    chunk_id, document_id, source_pdf_id (UUIDs), exact text, original_page_numbers
+    (page_start..page_end), score and rank 1..n, at most `limit` items.
+
+    Chunks failing integrity checks are dropped and later ranks close the gap. If
+    there were candidates but none survived, that is a data problem, not an empty
+    result, so RetrievalFailure is raised. No candidates returns [].
+    """
+    passages: list[Any] = []
+    seen: set[str] = set()
+    rejected = 0
+    for chunk in result.chunks:
+        if len(passages) == limit:
+            break
+        fields = passage_fields(chunk, rank=len(passages) + 1)
+        if fields is None or fields["chunk_id"] in seen:
+            rejected += 1
+            continue
+        seen.add(fields["chunk_id"])
+        passages.append(passage_factory(**fields))
+    if rejected:
+        logger.warning("Dropped %d retrieved chunks that failed integrity checks", rejected)
+        if not passages:
+            raise RetrievalFailure("All retrieved chunks failed integrity checks")
+    return passages

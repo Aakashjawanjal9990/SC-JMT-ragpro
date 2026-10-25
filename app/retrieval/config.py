@@ -37,12 +37,10 @@ def _env_float(name: str, default: float | None) -> float | None:
 
 @dataclass(frozen=True)
 class RetrievalSettings:
-    # Source of truth + dense search: "pgvector" (Cloud SQL) or "memory" (local dev/tests).
+    # Source of truth + dense search: "pgvector" (Cloud SQL, chunks.embedding) or
+    # "memory" (local dev/tests).
     vector_store: str = "pgvector"
     source_db: DatabaseConfig = field(default_factory=DatabaseConfig)
-    pg_embedding_table: str = "chunk_embeddings"
-    pg_embedding_column: str = "embedding"
-    pg_sync_status: str | None = None  # if set, only embeddings with this sync_status rank
     pg_ef_search: int | None = None  # HNSW recall/speed knob (pgvector default 40)
     pg_iterative_scan: str | None = None  # pgvector >= 0.8: relaxed_order keeps filtered k full
     metric: str = "cosine"
@@ -83,11 +81,6 @@ class RetrievalSettings:
         return cls(
             vector_store=_env_str("RETRIEVAL_VECTOR_STORE", defaults.vector_store),
             source_db=DatabaseConfig.from_environment(""),
-            pg_embedding_table=_env_str("RETRIEVAL_PG_EMBEDDING_TABLE", defaults.pg_embedding_table),
-            pg_embedding_column=_env_str(
-                "RETRIEVAL_PG_EMBEDDING_COLUMN", defaults.pg_embedding_column
-            ),
-            pg_sync_status=_env_str("RETRIEVAL_PG_SYNC_STATUS"),
             pg_ef_search=_env_int("RETRIEVAL_PG_EF_SEARCH", None),
             pg_iterative_scan=_env_str("RETRIEVAL_PG_ITERATIVE_SCAN"),
             metric=_env_str("RETRIEVAL_METRIC", defaults.metric),

@@ -1,12 +1,12 @@
 """pgvector store over the source-of-truth database (Cloud SQL `scrag`).
 
-Dense search, the citable checks and the filters run in one SQL statement, so only
+Vectors live in chunks.embedding (vector(768) in the confirmed schema). Dense
+search, the citable checks and the filters run in one SQL statement, so only
 active chunks of current source files, belonging to the right judgment, can rank.
 `get()` re-reads chunks (e.g. BM25 hits) from the same tables with the same checks:
 text always comes from chunks.content and ids/pages from the row itself.
 """
 
-import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -30,8 +30,6 @@ from app.retrieval.models import (
     RetrievedChunk,
 )
 from app.retrieval.sql_filters import filters_to_sql
-
-_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$")
 
 # metric -> (pgvector operator, distance -> similarity score)
 _METRICS = {
@@ -82,6 +80,17 @@ def load_active_embedding_model(db: Database) -> EmbeddingModelInfo:
     return EmbeddingModelInfo(str(row[0]), row[1], row[2], row[3], row[4])
 
 
+def embedding_dimensions(db: Database) -> int:
+    """Dimension of chunks.embedding, read from the column type (vector(768) -> 768)."""
+    rows = db.fetch_all(
+        "SELECT atttypmod FROM pg_attribute "
+        "WHERE attrelid = 'chunks'::regclass AND attname = 'embedding' AND NOT attisdropped"
+    )
+    if not rows or rows[0][0] is None or rows[0][0] < 1:
+        raise RuntimeError("chunks.embedding is missing or has no fixed dimension")
+    return int(rows[0][0])
+
+
 def _chunk_from_row(row: Any) -> Chunk:
     m = row._mapping
     metadata = {
@@ -107,28 +116,17 @@ class PgVectorStore:
     def __init__(
         self,
         db: Database,
-        embedding_model_uuid: str,
         *,
-        embedding_table: str = "chunk_embeddings",
-        embedding_column: str = "embedding",
         metric: str = "cosine",
-        sync_status: str | None = None,
         ef_search: int | None = None,
         iterative_scan: str | None = None,
     ) -> None:
-        for identifier in (embedding_table, embedding_column):
-            if not _IDENTIFIER.match(identifier):
-                raise ValueError(f"Invalid SQL identifier: {identifier!r}")
         if metric not in _METRICS:
             raise ValueError(f"Unsupported metric {metric!r}; expected one of {sorted(_METRICS)}")
         if iterative_scan not in (None, "strict_order", "relaxed_order"):
             raise ValueError("iterative_scan must be strict_order or relaxed_order")
         self.db = db
-        self.embedding_model_uuid = embedding_model_uuid
-        self._table = embedding_table
-        self._column = embedding_column
         self._operator, self._to_score = _METRICS[metric]
-        self._sync_status = sync_status
         self._ef_search = ef_search
         self._iterative_scan = iterative_scan
 
@@ -136,22 +134,14 @@ class PgVectorStore:
         self, query_vector: np.ndarray, k: int, filters: Filters | None = None
     ) -> list[RetrievedChunk]:
         filter_sql, params = filters_to_sql(filters, FILTER_COLUMNS)
-        sync_sql = " AND e.sync_status = :sync_status" if self._sync_status else ""
-        distance = f"e.{self._column} {self._operator} CAST(:query_vector AS vector)"
+        distance = f"c.embedding {self._operator} CAST(:query_vector AS vector)"
         sql = f"""
             SELECT {_CHUNK_COLUMNS}, {distance} AS distance
-            FROM {self._table} e
-            JOIN chunks c ON c.chunk_uuid = e.chunk_uuid {_CHUNK_JOINS}
-            WHERE e.embedding_model_uuid = CAST(:model AS uuid)
-              AND {_CITABLE}{sync_sql}{filter_sql}
+            FROM chunks c {_CHUNK_JOINS}
+            WHERE c.embedding IS NOT NULL AND {_CITABLE}{filter_sql}
             ORDER BY {distance}
             LIMIT :k"""
-        params.update(
-            query_vector=_vector_literal(query_vector),
-            model=self.embedding_model_uuid,
-            sync_status=self._sync_status,
-            k=k,
-        )
+        params.update(query_vector=_vector_literal(query_vector), k=k)
         with self.db.transaction() as connection:
             # SET LOCAL only lasts for this transaction; values are validated ints/enums.
             if self._ef_search:

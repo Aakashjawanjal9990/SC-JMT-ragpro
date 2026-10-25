@@ -16,7 +16,7 @@ from app.retrieval.bm25_index import BM25Index
 from app.retrieval.bm25_pg import PostgresBM25Index
 from app.retrieval.config import RetrievalSettings
 from app.retrieval.db import Database
-from app.retrieval.pg_store import PgVectorStore, load_active_embedding_model
+from app.retrieval.pg_store import PgVectorStore
 from app.retrieval.vector_store import open_vector_store
 
 
@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> None:
         if settings.vector_store == "pgvector":
             source_db = Database(settings.source_db, "source database")
             databases.append(source_db)
-            source = PgVectorStore(source_db, load_active_embedding_model(source_db).uuid)
+            source = PgVectorStore(source_db)
         else:
             source = open_vector_store(settings)
 

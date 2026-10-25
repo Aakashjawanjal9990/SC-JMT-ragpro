@@ -15,7 +15,11 @@ from app.retrieval.db import Database
 from app.retrieval.embedder import QueryEmbedder
 from app.retrieval.filters import Filters
 from app.retrieval.models import DOCUMENT_ID, RetrievedChunk, format_citation
-from app.retrieval.pg_store import PgVectorStore, load_active_embedding_model
+from app.retrieval.pg_store import (
+    PgVectorStore,
+    embedding_dimensions,
+    load_active_embedding_model,
+)
 from app.retrieval.reranker import CrossEncoderReranker
 from app.retrieval.tokenizer import tokenize
 from app.retrieval.vector_store import VectorStore, open_vector_store
@@ -137,11 +141,7 @@ class HybridRetriever:
                 )
             store: VectorStore = PgVectorStore(
                 source_db,
-                model.uuid,
-                embedding_table=settings.pg_embedding_table,
-                embedding_column=settings.pg_embedding_column,
                 metric=settings.metric,
-                sync_status=settings.pg_sync_status,
                 ef_search=settings.pg_ef_search,
                 iterative_scan=settings.pg_iterative_scan,
             )
@@ -149,7 +149,8 @@ class HybridRetriever:
                 model.model_id,
                 normalize=settings.normalize_embeddings,
                 query_prefix=settings.query_prefix,
-                expected_dimensions=model.dimensions,
+                # Query vectors must fit the column (vector(768) in the confirmed schema).
+                expected_dimensions=embedding_dimensions(source_db),
             )
         else:
             store = open_vector_store(settings)
