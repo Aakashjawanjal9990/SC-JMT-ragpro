@@ -52,7 +52,7 @@ rebuilding, not just restarting.
 | `/`                                       | Landing                   | public                                                                                                       |
 | `/login`, `/register`, `/forgot-password` | Auth pages                | public (Login and Register send signed-in users to `/home`)                                                  |
 | `/home`                                   | Chat                      | needs a user session (`ProtectedRoute`). `/home?c=<conversationId>` opens that conversation (see section 6). |
-| `/admin`                                  | Admin login, then console | needs the admin token                                                                                        |
+| `/admin`                                  | Admin login, then console | needs the admin session (cookie)                                                                             |
 
 `ProtectedRoute` and the `/admin` gate only decide what the browser shows.
 Anyone can bypass them. **Every real check must be on the server.**
@@ -72,17 +72,27 @@ not exist yet. Say so if you want it and it can be added.
 
 ## 6. How the frontend behaves
 
-- **Token header.** Every request sends `Authorization: Bearer <token>`.
-  Paths starting `/admin` use the admin token; all others use the user token.
-- **Token storage.** User token: `localStorage` if "Remember me", else
-  `sessionStorage` (key `nm_token`). Admin token: `sessionStorage` only
-  (`nm_admin_token`). Also stored: `nm_wish_day` (date of last greeting).
+- **Session cookie.** Sign-in is an HttpOnly session cookie set by the
+  backend. The frontend never sees, stores or sends a token. Every request
+  uses `credentials: 'include'`, so the browser attaches the cookie. Admin
+  sign-in uses its own cookie.
+- **Restoring the session.** On every page load the frontend calls
+  `GET /auth/me`. A user means signed in; a 401 means signed out. The admin
+  console cannot do this (no admin "who am I" call), so `/admin` asks for the
+  admin credentials again after each reload.
+- **CSRF.** Requests other than GET send the backend's CSRF token in the
+  `X-CSRF-Token` header. The token is read from the `csrf_token` cookie (when
+  the browser can read it) or from an `X-CSRF-Token` response header. Both
+  names can be changed with `VITE_CSRF_HEADER` and `VITE_CSRF_COOKIE`.
+- **Browser storage.** No auth data. Only `nm_wish_day` (date of the last
+  greeting) and `nm_sidebar:<email>` (pinned conversation ids).
 - **Timeout.** 60 seconds per request, then the user sees "The server took too
   long to respond."
-- **401 handling.** A 401 on a request that carried a token clears that token
-  and sends the user to Sign In (admin: back to the admin login). A 401 on a
-  request with no token (wrong password at login) just shows the error text.
-  A 401 from `/auth/logout` is ignored.
+- **401 handling.** A 401 from any call except the sign-in family
+  (`/auth/login`, `/auth/register`, `/auth/verify`, `/auth/resend`,
+  `/auth/forgot`, `/auth/reset`, `/auth/me`, `/auth/logout`, `/admin/login`,
+  `/admin/logout`) means the session ended: the user goes to Sign In (admin:
+  back to the admin login). A 401 from those paths just shows the error text.
 - **Error text.** For 4xx replies the frontend shows the backend's text
   (max 200 characters): `{"detail": "text"}`, FastAPI's 422 list
   `{"detail": [{"msg": "..."}]}` (messages joined), or `{"message": "..."}`.
@@ -108,23 +118,26 @@ All bodies and replies are JSON. Dates are ISO 8601 strings.
 
 ### Auth (public unless noted)
 
-| #   | Request                      | Body                      | Success reply                                         | Notes                                                                                                                                                                            |
-| --- | ---------------------------- | ------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `POST /auth/register`        | `{name, email, password}` | `{verificationRequired: true}` **or** `{token, user}` | Email is already lower-cased and trimmed by the frontend. 409 if the email exists.                                                                                               |
-| 2   | `POST /auth/verify`          | `{email, code}`           | `{token, user}`                                       | `code` is exactly 6 digits. 400/422 with a clear message if wrong or expired.                                                                                                    |
-| 3   | `POST /auth/resend`          | `{email}`                 | `{sent: true}`                                        | Rate-limit it.                                                                                                                                                                   |
-| 4   | `POST /auth/login`           | `{email, password}`       | `{token, user}`                                       | 401 for wrong credentials. Use the same message for "no such user" and "wrong password". For an unverified account use 403 with a message like "Please verify your email first." |
-| 5   | `POST /auth/forgot`          | `{email}`                 | `{sent: true}`                                        | Always reply 200, even if the email is unknown, so it cannot be used to find registered users.                                                                                   |
-| 6   | `POST /auth/reset`           | `{email, code, password}` | `{ok: true}`                                          | Invalidate old sessions after a reset.                                                                                                                                           |
-| 7   | `GET /auth/me` (Bearer)      | none                      | `user`                                                | Called on every page load that has a saved token, and after login if the reply had no `user`. 401 if the token is bad or expired.                                                |
-| 8   | `POST /auth/logout` (Bearer) | `{}`                      | `{ok: true}`                                          | Must revoke the session server-side. The frontend deletes its token regardless of the result.                                                                                    |
+| #   | Request                              | Body                          | Success reply                                                     | Notes                                                                                                                                                                            |
+| --- | ------------------------------------ | ----------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `POST /auth/register`                | `{name, email, password}`     | `{verificationRequired: true}` **or** `{user}` (+ session cookie) | Email is already lower-cased and trimmed by the frontend. 409 if the email exists.                                                                                               |
+| 2   | `POST /auth/verify`                  | `{email, code}`               | `{user}` (+ session cookie)                                       | `code` is exactly 6 digits. 400/422 with a clear message if wrong or expired.                                                                                                    |
+| 3   | `POST /auth/resend`                  | `{email}`                     | `{sent: true}`                                                    | Rate-limit it.                                                                                                                                                                   |
+| 4   | `POST /auth/login`                   | `{email, password, remember}` | `{user}` (+ session cookie)                                       | 401 for wrong credentials. Use the same message for "no such user" and "wrong password". For an unverified account use 403 with a message like "Please verify your email first." |
+| 5   | `POST /auth/forgot`                  | `{email}`                     | `{sent: true}`                                                    | Always reply 200, even if the email is unknown, so it cannot be used to find registered users.                                                                                   |
+| 6   | `POST /auth/reset`                   | `{email, code, password}`     | `{ok: true}`                                                      | Invalidate old sessions after a reset.                                                                                                                                           |
+| 7   | `GET /auth/me` (session cookie)      | none                          | `user`                                                            | Called on **every page load**, and after login if the reply had no `user`. 401 when nobody is signed in or the session expired.                                                  |
+| 8   | `POST /auth/logout` (session cookie) | `{}`                          | `{ok: true}`                                                      | Must revoke the session server-side **and clear the cookie** in the reply.                                                                                                       |
 
-The frontend also accepts `access_token` in place of `token`.
+On success the backend sets the session cookie and does **not** return a
+token. `{user}` is optional: without it the frontend calls `/auth/me`.
+`remember` (true or false) lets the backend choose a persistent or a
+session-only cookie.
 
 Password rule in the UI: at least 8 characters, with a letter and a number.
 Name rule: letters, spaces, `.`, `'`, `-` only. Enforce the same on the server.
 
-### Chat (Bearer user token)
+### Chat (user session cookie)
 
 | #   | Request                        | Body / query                                                                                                      | Success reply                                                                                   |
 | --- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
@@ -155,11 +168,14 @@ is shown as the reply. Otherwise #10 is sent.
 - Only return conversations that belong to the calling user. Check ownership
   on #12; return 404 (not 403) for someone else's id.
 
-### Admin (separate token)
+### Admin (separate admin session cookie)
+
+The frontend also calls `POST /admin/logout` (body `{}`) to end the admin
+session and clear its cookie. It is not in the numbered list below.
 
 | #   | Request                    | Body / query                             | Success reply                                                                                    |
 | --- | -------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| 13  | `POST /admin/login`        | `{username, password}`                   | `{token}`                                                                                        |
+| 13  | `POST /admin/login`        | `{username, password}`                   | `{ok: true}` (+ admin session cookie)                                                            |
 | 14  | `GET /admin/users`         | `?page=1&pageSize=10&status=all&search=` | `{items: [{id, name, email, registered_at, status}], page, pageSize, total}`                     |
 | 15  | `GET /admin/auth-activity` | none                                     | `[{id, user_id, session_id, event_type, occurred_at, logout_at, expires_at, event_status}]`      |
 | 16  | `GET /admin/sessions`      | none                                     | `[{session_id, user_id, name, email, created_at, last_activity, expires_at, logout_at, status}]` |
@@ -202,17 +218,19 @@ frontend.
    default messages read like "String should have at least 8 characters".
    Consider a custom `RequestValidationError` handler that returns friendlier
    text.
-4. **CORS.** Add `CORSMiddleware` with the exact frontend origin(s) (not `*`),
-   `allow_methods=["GET","POST"]`, and `allow_headers=["Authorization",
-"Content-Type"]`. Because the frontend sends `Authorization`, every call is
-   preflighted with `OPTIONS`.
+4. **CORS with cookies.** Add `CORSMiddleware` with the exact frontend
+   origin(s) (not `*`), `allow_credentials=True`,
+   `allow_methods=["GET","POST","DELETE"]`,
+   `allow_headers=["Content-Type","X-CSRF-Token"]` and
+   `expose_headers=["X-CSRF-Token"]`. Every call is preflighted with
+   `OPTIONS` because of the JSON content type.
 5. **Trailing slashes.** Declare routes exactly as listed (no trailing slash),
    or set `redirect_slashes=False`. A 307 redirect on a cross-origin request
-   can drop the `Authorization` header.
-6. **Two token types.** Issue admin tokens with a different secret or an
-   `aud`/`role` claim, and reject user tokens on `/admin/*` and admin tokens
-   on user routes. Use a dependency (`Depends`) on the admin router, not
-   per-route checks you might forget.
+   can drop the cookie and CSRF header.
+6. **Two session types.** Use a different cookie name (and secret or
+   `aud`/`role` claim) for admin sessions, and reject user sessions on
+   `/admin/*` and admin sessions on user routes. Use a dependency
+   (`Depends`) on the admin router, not per-route checks you might forget.
 7. **Long answers.** `/chat/query` runs retrieval and an LLM call. Make it
    `async`, set an upstream timeout, and return a readable `detail` when it
    fails. Streaming is **not** supported by this frontend; it expects one JSON
@@ -242,8 +260,9 @@ Done in the frontend:
   answers and admin data.
 - No secrets, no demo credentials and no mock code in the bundle.
 - Production build refuses a non-HTTPS API address.
-- Request timeout; 401 forces sign-out; admin token lives only in the tab.
-- Admin and user tokens are separate and each is sent only to its own routes.
+- Request timeout; a 401 on a signed-in call forces sign-out.
+- No tokens in `localStorage` or `sessionStorage`; sessions are HttpOnly cookies.
+- Admin and user sessions are separate cookies.
 
 Needs doing (backend or deployment). None of this is implemented here:
 
@@ -251,15 +270,23 @@ Needs doing (backend or deployment). None of this is implemented here:
 - Store OTP and reset codes hashed, with a 5 to 10 minute expiry and an
   attempt limit.
 - Rate-limit and lock out `/auth/*` and `/admin/login`.
-- Short-lived access tokens (15 to 30 minutes) plus refresh. **Note:** this
-  frontend has no refresh-token logic. A 401 signs the user out. Adding
-  silent refresh is a code change in `api.js`.
+- Session lifetime: short idle timeout, server-side revocation on logout
+  and password reset. The frontend has no refresh logic; a 401 signs the
+  user out.
 - Check the admin role on every `/admin/*` route on the server.
-- **Tokens in browser storage** can be read by any script on the page. The
-  safer setup is an `HttpOnly; Secure; SameSite` cookie. Moving to it means
-  changing `api.js` (`credentials: 'include'`, stop storing tokens), the
-  token store, `AuthContext`, and adding CSRF protection on the backend. It
-  is a real change, not a setting.
+- **Cookie sessions (done in the frontend, backend must match).** Set the
+  session cookie `HttpOnly; Secure; SameSite=Lax` (or `Strict`), with a
+  separate admin cookie. Keep the app and the API on the **same site** (for
+  example `app.example.com` and `api.example.com`). If they are on different
+  sites the cookie needs `SameSite=None`, which weakens CSRF protection.
+- **CORS with credentials.** `Access-Control-Allow-Origin` must be the exact
+  frontend origin (never `*`), with `Access-Control-Allow-Credentials: true`,
+  allowed methods `GET, POST, DELETE, OPTIONS`, allowed headers
+  `Content-Type, X-CSRF-Token`, and `X-CSRF-Token` in the exposed headers.
+- **CSRF.** Reject POST and DELETE calls whose CSRF header is missing or does
+  not match. If the CSRF cookie is on the API's host, it is only readable by
+  this page when its `Domain` is the shared parent domain; otherwise return the
+  token in an `X-CSRF-Token` response header (for example on `/auth/me`).
 - Serve over HTTPS and send security headers from your host or proxy:
   `Content-Security-Policy`, `X-Content-Type-Options`, `Referrer-Policy`,
   `frame-ancestors`. A CSP is not set by this repo.
@@ -273,16 +300,16 @@ Needs doing (backend or deployment). None of this is implemented here:
 Check the backend by hand first:
 
     API=http://localhost:8000/api
-    curl -s -X POST $API/auth/login -H 'Content-Type: application/json' \
+    curl -s -c jar.txt -X POST $API/auth/login -H 'Content-Type: application/json' \
          -d '{"email":"a@b.com","password":"Passw0rd1"}'
-    curl -s $API/auth/me -H "Authorization: Bearer <token>"
+    curl -s -b jar.txt $API/auth/me
 
 Then in the browser, open DevTools, Network tab, and walk this list:
 
 1. Register, with and without email verification.
 2. Wrong password (shows the error, does not loop or sign out).
 3. Reload while signed in (calls `/auth/me`, stays signed in).
-4. Expire or delete the token (next call returns 401, lands on Sign In).
+4. Delete the session cookie (next call returns 401, lands on Sign In).
 5. Ask a question: you should see `/chat/interpret` then `/chat/query`.
 6. Make `/chat/interpret` return 404: the question should still work.
 7. Reload and click an old conversation in the sidebar.

@@ -1,35 +1,51 @@
 // The only file that talks to the backend (FastAPI). Every call is JSON
 // over fetch.
+//
+// Sign-in is an HttpOnly session cookie set by the backend. This code never
+// sees, stores or sends a token: the browser attaches the cookie itself
+// because every request uses `credentials: 'include'`.
 
 const BASE = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 const TIMEOUT_MS = 60000;
-const TOKEN_KEY = 'nm_token';
-const ADMIN_KEY = 'nm_admin_token';
+
+// CSRF: state-changing requests echo the backend's CSRF token in a header.
+// Names are configurable so they can match whatever the backend settles on.
+const CSRF_HEADER = import.meta.env.VITE_CSRF_HEADER || 'X-CSRF-Token';
+const CSRF_COOKIE = import.meta.env.VITE_CSRF_COOKIE || 'csrf_token';
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+// A 401 from these paths is an ordinary answer (wrong password, nobody signed
+// in yet), not "your session ended", so it must not trigger a sign-out.
+const PLAIN_401 = new Set([
+  '/auth/login',
+  '/auth/register',
+  '/auth/verify',
+  '/auth/resend',
+  '/auth/forgot',
+  '/auth/reset',
+  '/auth/me',
+  '/auth/logout',
+  '/admin/login',
+  '/admin/logout',
+]);
 
 if (!BASE && import.meta.env.DEV) {
   console.error('VITE_API_URL is not set. Copy .env.example to .env.');
 }
 
-/** User session. "Remember me" -> localStorage, otherwise sessionStorage. */
-export const tokenStore = {
-  get: () =>
-    sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY),
-  set: (token, remember = true) => {
-    tokenStore.clear();
-    (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
-  },
-  clear: () => {
-    localStorage.removeItem(TOKEN_KEY);
-    sessionStorage.removeItem(TOKEN_KEY);
-  },
-};
+// The CSRF token is not a secret from scripts on this page (that is the
+// point of the double-submit pattern), so keeping it in memory is fine.
+let csrfFromHeader = '';
 
-/** Admin session: tab-scoped, gone when the tab closes. */
-export const adminToken = {
-  get: () => sessionStorage.getItem(ADMIN_KEY),
-  set: (token) => sessionStorage.setItem(ADMIN_KEY, token),
-  clear: () => sessionStorage.removeItem(ADMIN_KEY),
-};
+function csrfToken() {
+  const hit = document.cookie
+    .split('; ')
+    .find((part) => part.startsWith(`${CSRF_COOKIE}=`));
+  const fromCookie = hit
+    ? decodeURIComponent(hit.slice(CSRF_COOKIE.length + 1))
+    : '';
+  return fromCookie || csrfFromHeader;
+}
 
 /**
  * Turn a failed reply into one safe sentence for the user.
@@ -67,17 +83,18 @@ function errorMessage(data, status) {
 
 async function request(path, { method = 'GET', body } = {}) {
   const isAdmin = path.startsWith('/admin');
-  const token = isAdmin ? adminToken.get() : tokenStore.get();
+  const csrf = SAFE_METHODS.has(method) ? '' : csrfToken();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   let res;
   try {
     res = await fetch(BASE + path, {
       method,
+      credentials: 'include',
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
-        ...(token && { Authorization: `Bearer ${token}` }),
+        ...(csrf && { [CSRF_HEADER]: csrf }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -90,10 +107,11 @@ async function request(path, { method = 'GET', body } = {}) {
   } finally {
     clearTimeout(timer);
   }
+  // Needs the backend to expose the header to the browser (CORS).
+  csrfFromHeader = res.headers.get(CSRF_HEADER) || csrfFromHeader;
   const data = await res.json().catch(() => ({}));
-  // A 401 on a request that carried a token means the session ended.
-  // (A wrong password also returns 401, but no token was sent then.)
-  if (res.status === 401 && token && path !== '/auth/logout') {
+  // A 401 anywhere else means the session cookie is missing or has expired.
+  if (res.status === 401 && !PLAIN_401.has(path)) {
     window.dispatchEvent(
       new Event(isAdmin ? 'nm:admin-unauthorized' : 'nm:unauthorized'),
     );
@@ -178,7 +196,8 @@ async function queryWithInterpretation(question, conversationId, think) {
 
 export const api = {
   // Auth
-  login: (email, password) => post('/auth/login', { email, password }),
+  login: (email, password, remember = true) =>
+    post('/auth/login', { email, password, remember }),
   register: (payload) => post('/auth/register', payload),
   verify: (email, code) => post('/auth/verify', { email, code }),
   resend: (email) => post('/auth/resend', { email }),
@@ -201,6 +220,7 @@ export const api = {
   // Admin
   adminLogin: (username, password) =>
     post('/admin/login', { username, password }),
+  adminLogout: () => post('/admin/logout', {}),
   adminUsers: ({ page, pageSize, status, search }) => {
     const qs = new URLSearchParams({ page, pageSize, status, search });
     return request(`/admin/users?${qs}`);

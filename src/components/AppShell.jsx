@@ -58,8 +58,8 @@ export default function AppShell({
     }
   };
 
-  const signOut = () => {
-    logout();
+  const signOut = async () => {
+    await logout();
     navigate('/', { replace: true });
   };
 

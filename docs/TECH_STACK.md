@@ -6,34 +6,34 @@ React Router upgrade (section 5), update the two rows marked with `*`.
 
 ## 1. Shipped to the browser
 
-| Layer                       | Technology                                                                 | Version                |
-| --------------------------- | -------------------------------------------------------------------------- | ---------------------- |
-| Language                    | JavaScript (ES modules) with JSX; no TypeScript                            | n/a                    |
-| UI library                  | React and React DOM                                                        | 18.3.1                 |
-| Routing *                   | React Router DOM (core: react-router, @remix-run/router)                   | 6.30.6 (router 1.23.4) |
-| Icons                       | lucide-react                                                               | 0.453.0                |
-| Styling                     | One hand-written CSS file, `src/styles/global.css`. No Tailwind, no UI kit | n/a                    |
-| Fonts                       | Inter, Lora, Poppins from Google Fonts (not self-hosted)                   | n/a                    |
-| Network                     | Browser `fetch`, JSON bodies, 60 s timeout. No Axios                       | built in               |
-| State                       | React Context (`AuthContext`) and one hook (`useChat`). No Redux           | n/a                    |
-| Internal React dependencies | scheduler 0.23.2, loose-envify 1.4.0, js-tokens 4.0.0                      |                        |
+| Layer                       | Technology                                                                 | Version                               |
+| --------------------------- | -------------------------------------------------------------------------- | ------------------------------------- |
+| Language                    | JavaScript (ES modules) with JSX; no TypeScript                            | n/a                                   |
+| UI library                  | React and React DOM                                                        | 18.3.1                                |
+| Routing *                   | React Router DOM (core: react-router, @remix-run/router)                   | ^7.18.2 (check `npm ls react-router`) |
+| Icons                       | lucide-react                                                               | 0.453.0                               |
+| Styling                     | One hand-written CSS file, `src/styles/global.css`. No Tailwind, no UI kit | n/a                                   |
+| Fonts                       | Inter, Lora, Poppins from Google Fonts (not self-hosted)                   | n/a                                   |
+| Network                     | Browser `fetch`, JSON bodies, 60 s timeout. No Axios                       | built in                              |
+| State                       | React Context (`AuthContext`) and one hook (`useChat`). No Redux           | n/a                                   |
+| Internal React dependencies | scheduler 0.23.2, loose-envify 1.4.0, js-tokens 4.0.0                      |                                       |
 
 The production bundle contains only these nine packages.
 
 ## 2. Build and quality tooling (not shipped)
 
-| Tool                      | Purpose                     | Version |
-| ------------------------- | --------------------------- | ------- |
-| Vite                      | Build tool and dev server   | 5.4.21  |
-| esbuild (inside Vite)     | Bundler                     | 0.21.5  |
-| @vitejs/plugin-react      | React support               | 4.7.0   |
-| ESLint and @eslint/js     | Linting, `--max-warnings 0` | 9.39.5  |
-| eslint-plugin-react       | React rules                 | 7.37.5  |
-| eslint-plugin-react-hooks | Hooks rules                 | 5.2.0   |
-| eslint-config-prettier    | Avoids lint/format clashes  | 9.1.2   |
-| globals                   | Lint environment names      | 15.15.0 |
-| Prettier                  | Formatting                  | 3.9.10  |
-| Node.js                   | Local and CI runtime        | 20      |
+| Tool                      | Purpose                     | Version        |
+| ------------------------- | --------------------------- | -------------- |
+| Vite                      | Build tool and dev server   | ^7.3.6         |
+| esbuild (inside Vite)     | Bundler                     | 0.28.x         |
+| @vitejs/plugin-react      | React support               | 4.7.0          |
+| ESLint and @eslint/js     | Linting, `--max-warnings 0` | 9.39.5         |
+| eslint-plugin-react       | React rules                 | 7.37.5         |
+| eslint-plugin-react-hooks | Hooks rules                 | 5.2.0          |
+| eslint-config-prettier    | Avoids lint/format clashes  | 9.1.2          |
+| globals                   | Lint environment names      | 15.15.0        |
+| Prettier                  | Formatting                  | 3.9.10         |
+| Node.js                   | Local and CI runtime        | 22 (min 20.19) |
 
 ## 3. CI (`.github/workflows/ci.yml`)
 
@@ -46,12 +46,12 @@ Actions: `actions/checkout@v4`, `actions/setup-node@v4`
 ## 4. Backend contract (not in this repo)
 
 The backend is FastAPI (stated by the team, not verifiable from this repo).
-The frontend expects JSON over HTTPS at `VITE_API_URL`, Bearer tokens, and
+The frontend expects JSON over HTTPS at `VITE_API_URL`, HttpOnly session cookies (CORS with credentials, CSRF header), and
 the 17 endpoints in `docs/FRONTEND_GUIDE.md`. There is no database, model,
 search index, email service or cloud config in this repo.
 
-Browser storage: `nm_token` (localStorage or sessionStorage),
-`nm_admin_token` (sessionStorage), `nm_wish_day` (localStorage).
+Browser storage: no auth data. `nm_wish_day` and `nm_sidebar:<email>`
+(localStorage) only.
 Only third-party request: Google Fonts.
 
 ## 5. Known dependency issues

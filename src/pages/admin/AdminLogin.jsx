@@ -4,7 +4,7 @@ import { ShieldCheck } from 'lucide-react';
 import { PrimaryButton } from '../../components/Buttons';
 import Logo from '../../components/Logo';
 import TextField from '../../components/TextField';
-import { api, adminToken } from '../../lib/api';
+import { api } from '../../lib/api';
 
 /** Separate credentials from user accounts. Checked by POST /admin/login. */
 export default function AdminLogin({ onSuccess }) {
@@ -21,11 +21,7 @@ export default function AdminLogin({ onSuccess }) {
     setBusy(true);
     setError('');
     try {
-      const { token } = await api.adminLogin(
-        form.username.trim(),
-        form.password,
-      );
-      adminToken.set(token);
+      await api.adminLogin(form.username.trim(), form.password);
       onSuccess();
     } catch (err) {
       setError(err.message);
