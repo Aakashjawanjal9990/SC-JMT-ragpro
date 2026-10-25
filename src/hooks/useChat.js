@@ -62,5 +62,23 @@ export default function useChat() {
     }
   }, []);
 
-  return { messages, conversations, conversationId, busy, send, reset, open };
+  const remove = useCallback(async (id) => {
+    try {
+      await api.deleteConversation(id);
+    } catch (err) {
+      if (err.status !== 404) throw err; // 404 means it is already gone
+    }
+    setConversations((prev) => prev.filter((c) => String(c.id) !== String(id)));
+  }, []);
+
+  return {
+    messages,
+    conversations,
+    conversationId,
+    busy,
+    send,
+    reset,
+    open,
+    remove,
+  };
 }

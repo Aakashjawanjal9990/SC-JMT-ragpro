@@ -193,6 +193,10 @@ export const api = {
   conversations: () => request('/chat/conversations'),
   conversation: (id) =>
     request(`/chat/conversations/${encodeURIComponent(id)}`),
+  deleteConversation: (id) =>
+    request(`/chat/conversations/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
 
   // Admin
   adminLogin: (username, password) =>

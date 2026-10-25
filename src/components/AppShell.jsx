@@ -5,11 +5,15 @@ import {
   LogOut,
   Menu,
   MessageSquare,
+  Pin,
+  PinOff,
   Plus,
   Search,
   Share2,
+  Trash2,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import useSidebarPrefs from '../hooks/useSidebarPrefs';
 import { displayName } from '../lib/names';
 import scales from '../assets/scales.png';
 import Logo from './Logo';
@@ -21,17 +25,23 @@ export default function AppShell({
   activeId = null,
   onNew,
   onSelect,
+  onDelete,
   children,
 }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const prefs = useSidebarPrefs(user.email);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const shown = conversations.filter((c) =>
+  const matches = conversations.filter((c) =>
     (c.title || '').toLowerCase().includes(query.toLowerCase()),
+  );
+  const pinnedList = matches.filter((c) => prefs.pinned.includes(String(c.id)));
+  const recentList = matches.filter(
+    (c) => !prefs.pinned.includes(String(c.id)),
   );
 
   const share = async () => {
@@ -51,6 +61,56 @@ export default function AppShell({
   const signOut = () => {
     logout();
     navigate('/', { replace: true });
+  };
+
+  const deleteChat = async (c) => {
+    const title = c.title || 'Untitled research';
+    if (
+      !window.confirm(
+        `Delete "${title}" permanently?\n\nThis cannot be undone.`,
+      )
+    )
+      return;
+    try {
+      await onDelete?.(c.id);
+    } catch (err) {
+      window.alert(err.message);
+    }
+  };
+
+  const renderRow = (c) => {
+    const isPinned = prefs.pinned.includes(String(c.id));
+    const isActive = String(c.id) === String(activeId);
+    return (
+      <div key={c.id} className={`sidebar-row ${isActive ? 'active' : ''}`}>
+        <button
+          className="sidelink"
+          onClick={() => {
+            setOpen(false);
+            onSelect?.(c.id);
+          }}
+        >
+          <MessageSquare size={14} />
+          <span className="trunc">{c.title || 'Untitled research'}</span>
+        </button>
+        <button
+          className="row-action"
+          aria-label={isPinned ? 'Unpin research' : 'Pin research'}
+          title={isPinned ? 'Unpin' : 'Pin to top'}
+          onClick={() => prefs.togglePin(c.id)}
+        >
+          {isPinned ? <PinOff size={13} /> : <Pin size={13} />}
+        </button>
+        <button
+          className="row-action"
+          aria-label="Delete research"
+          title="Delete"
+          onClick={() => deleteChat(c)}
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
+    );
   };
 
   return (
@@ -111,27 +171,23 @@ export default function AppShell({
             <Search size={14} /> Search research
           </button>
         )}
+
+        {pinnedList.length > 0 && (
+          <>
+            <h4>PINNED</h4>
+            {pinnedList.map(renderRow)}
+          </>
+        )}
+
         <h4>YOUR RESEARCH</h4>
-        {shown.length === 0 && (
+        {matches.length === 0 && (
           <p className="sidehint">
             {conversations.length
               ? 'No matching research.'
               : 'Start a conversation and revisit your research here.'}
           </p>
         )}
-        {shown.map((c) => (
-          <button
-            key={c.id}
-            className={`sidelink ${String(c.id) === String(activeId) ? 'active' : ''}`}
-            onClick={() => {
-              setOpen(false);
-              onSelect?.(c.id);
-            }}
-          >
-            <MessageSquare size={14} />
-            <span className="trunc">{c.title || 'Untitled research'}</span>
-          </button>
-        ))}
+        {recentList.map(renderRow)}
       </aside>
 
       <main className="shell-main">

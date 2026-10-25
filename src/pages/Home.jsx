@@ -97,6 +97,12 @@ export default function Home() {
     chat.reset();
   };
 
+  const deleteConversation = async (id) => {
+    const wasOpen = String(id) === String(chat.conversationId);
+    await chat.remove(id);
+    if (wasOpen) startNewResearch();
+  };
+
   return (
     <AppShell
       className="home-shell"
@@ -105,6 +111,7 @@ export default function Home() {
       activeId={chat.conversationId}
       onNew={startNewResearch}
       onSelect={chat.open}
+      onDelete={deleteConversation}
     >
       <div
         className={`chat-area ${chat.messages.length ? '' : 'empty'} ${initialDailyState && !chat.messages.length ? 'initial-daily' : ''}`}
