@@ -42,7 +42,7 @@ It handles two contrasting document paradigms without human intervention:
 • Short Canonical Prefixes (<= 12 words)                                • Frozen db/schema.sql (Rule R1)
 • Vertex AI text-embedding-004 (768-dim)                                • Deterministic UUIDv5 Idempotency
 • Finite float & L2 Unit-Norm Audit                                     • Atomic Ingestion Transactions
-• Hybrid RRF Retrieval Engine (k=60)                                    • Multi-Judge Review Sheet Export
+• Direct GCS Streaming & Ingestion                                      • Multi-Judge Review Sheet Export
 ```
 
 ---
@@ -51,9 +51,9 @@ It handles two contrasting document paradigms without human intervention:
 
 ```
 PCEV2/
-├── config.py                     # Centralized pipeline thresholds, paths, and model configurations
+├── config.py                     # Centralized pipeline thresholds, paths, and GCS configurations
 ├── pipeline.py                   # 4-stage pipeline orchestrator (parsing -> chunking -> embedding -> vector_db)
-├── run_batch_ingestion.py        # Production batch execution harness & QA verification runner
+├── run_batch_ingestion.py        # Production batch execution harness & quality gate runner (local & GCS)
 ├── check_gates.py                # Automated audit script for 7 strict quality gates (G1–G11)
 ├── audit_quality.py              # Text quality auditor, header leak checker, and review sheet generator
 ├── core/
@@ -69,10 +69,9 @@ PCEV2/
 │   └── vertex_embedder.py        # 768-dim L2-normalized Vertex AI embedder with short canonical prefixes
 ├── storage/
 │   ├── db_loader.py              # Zero-DDL database writer conforming strictly to db/schema.sql
+│   ├── gcs_loader.py             # Google Cloud Storage (GCS) stream & download manager
 │   ├── stage_tracker.py          # 4-stage document lifecycle tracker & CSV export utility
 │   └── init_db.py                # Database schema initializer for Cloud SQL / SQLite
-├── retrieval/
-│   └── retrieval_engine.py       # Hybrid dense + lexical RRF retrieval & legal QA holding engine
 ├── approach/
 │   ├── PARSING_CHUNKING_EMBEDDING_APPROACH.md             # Master technical specification
 │   ├── PCE_V2_SOLUTIONS_TO_RELIABILITY_REVIEW.md          # Remediation of all review defects
@@ -180,26 +179,19 @@ python PCEV2/reports/generate_approach_pdf.py
 
 ---
 
-## 7. Hybrid RRF Legal Retrieval & Grounded QA Evaluation
+## 7. Google Cloud Storage (GCS) Batch Streaming
 
-`LegalRetrievalEngine` implements Reciprocal Rank Fusion ($k=60$) combining 768-dim dense semantic cosine similarity with stopword-filtered lexical scoring and judge/case metadata alignment.
+In production environments, PDFs stream directly from Google Cloud Storage without downloading the entire 43,000-document corpus locally:
 
-### Sample Grounded QA Queries Evaluated
-- **Query 1 (Octroi Duty)**: *"What did Kania C.J. hold regarding the octroi duty under the Municipal Act in Ram Krishna?"*  
-  $\to$ **Top Match**: `1950_1_15_25_EN_p6_c1` | Judge: `Harilal Kania` | Section: `OPINION` (Score: 0.0313)  
-  $\to$ **Holding**: Duties lawfully levied under law in force on Jan 1, 1935 continue until Federal Legislature makes contrary provision.
-- **Query 2 (Limitation Act)**: *"What was Fazl Ali J.'s holding on limitation under Article 182 in Bhawanipore Banking?"*  
-  $\to$ **Top Match**: `1950_1_25_29_EN_p2_c3` | Judge: `Saiyid Fazl Ali` | Section: `OPINION` (Score: 0.0270)  
-  $\to$ **Holding**: Execution application is barred by limitation under Art. 182; appeal dismissed with costs.
-- **Query 3 (Section 138 NI Act)**: *"Did the Supreme Court quash the criminal complaint in S. Nagesh v. Shobha S. Aradhya?"*  
-  $\to$ **Top Match**: `2026_1_183_190_EN_p4_c1` | Judge: `Sanjay Kumar` | Section: `OPINION` (Score: 0.0283)  
-  $\to$ **Holding**: Delay must be condoned before taking cognizance; complaint quashed.
-- **Query 4 (Disciplinary vs. Criminal)**: *"In Karnataka Lokayuktha v. Chandrashekar, can criminal prosecution continue if delinquent was exonerated in enquiry?"*  
-  $\to$ **Top Match**: `2026_1_191_205_EN_p1_c2` | Judge: `K. Vinod Chandran` | Section: `HEADNOTE` (Score: 0.0269)  
-  $\to$ **Holding**: Exoneration was for failure to examine trap officer, not on merits; criminal proceedings continue.
-- **Query 5 (Article 14 Equal Protection)**: *"Chiranjit Lal Chowdhuri v. Union of India equal protection Article 14"*  
-  $\to$ **Top Match**: `1950_1_869_940_EN_p67_c1` | Judge: `Sudhi Ranjan Das` | Section: `OPINION` (Score: 0.0314)  
-  $\to$ **Holding**: A single shareholder holding one share has standing to approach the Court for denial of equal protection.
+```bash
+# Ingest directly from GCS bucket for a target year
+python PCEV2/run_batch_ingestion.py --gcs --year 1950
+
+# Canary test run: ingest first 10 documents from GCS
+python PCEV2/run_batch_ingestion.py --gcs --year 1950 --limit 10
+```
+
+`GCSDataLoader` in `storage/gcs_loader.py` handles authentication via Google Application Default Credentials (ADC) or workload identity, streams PDF blobs to isolated temporary descriptors, processes pages through the 3-stage PCE pipeline, and records the canonical `gs://` URI in `source_files.storage_path`.
 
 ---
 
