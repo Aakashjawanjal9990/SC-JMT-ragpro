@@ -44,10 +44,10 @@ Thumbs.db
 
 # Local Outputs & Data Folders (STRICTLY EXCLUDED FROM GIT)
 output/
-PCEV2/output/
-PCEV2/o_p/
+o_p/
 data/
-PCEV2/data/
+PCEV2/
+tests/fixtures/
 *.pdf
 *.log
 ingestion_state.json

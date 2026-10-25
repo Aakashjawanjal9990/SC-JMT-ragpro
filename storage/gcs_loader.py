@@ -77,3 +77,4 @@ class GCSDataLoader:
         blob.download_to_filename(tmp_path)
         logger.info(f"Downloaded GCS blob {gcs_uri} -> {tmp_path}")
         return tmp_path, year
+

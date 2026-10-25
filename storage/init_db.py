@@ -117,6 +117,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     metadata TEXT,
     content_sha256 TEXT,
     is_active INTEGER NOT NULL DEFAULT 1,
+    embedding TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (judgment_uuid) REFERENCES judgments(judgment_uuid) ON DELETE CASCADE,

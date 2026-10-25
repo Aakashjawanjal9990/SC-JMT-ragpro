@@ -50,7 +50,8 @@ It handles two contrasting document paradigms without human intervention:
 ## 2. Directory Structure
 
 ```
-PCEV2/
+├── .env.example                  # Environment configuration template (GCS buckets, Cloud SQL, Vertex AI)
+├── requirements.txt              # Pinned production Python dependencies
 ├── config.py                     # Centralized pipeline thresholds, paths, and GCS configurations
 ├── pipeline.py                   # 4-stage pipeline orchestrator (parsing -> chunking -> embedding -> vector_db)
 ├── run_batch_ingestion.py        # Production batch execution harness & quality gate runner (local & GCS)
@@ -68,10 +69,12 @@ PCEV2/
 ├── embedding/
 │   └── vertex_embedder.py        # 768-dim L2-normalized Vertex AI embedder with short canonical prefixes
 ├── storage/
-│   ├── db_loader.py              # Zero-DDL database writer conforming strictly to db/schema.sql
+│   ├── db_loader.py              # Dual-dialect database writer (Cloud SQL PostgreSQL + SQLite, Zero DDL)
 │   ├── gcs_loader.py             # Google Cloud Storage (GCS) stream & download manager
 │   ├── stage_tracker.py          # 4-stage document lifecycle tracker & CSV export utility
 │   └── init_db.py                # Database schema initializer for Cloud SQL / SQLite
+├── db/
+│   └── schema.sql                # Official 20-table PostgreSQL 16.15 schema dump (pgvector + FTS)
 ├── approach/
 │   ├── PARSING_CHUNKING_EMBEDDING_APPROACH.md             # Master technical specification
 │   ├── PCE_V2_SOLUTIONS_TO_RELIABILITY_REVIEW.md          # Remediation of all review defects
@@ -81,7 +84,7 @@ PCEV2/
 │   └── generate_approach_pdf.py  # Publication-quality approach PDF generator
 ├── tests/
 │   └── test_pipeline.py          # End-to-end integration and unit tests for all pipeline modules
-└── output/                       # Aliased to PCEV2/o_p/
+└── output/                       # Local deliverables & logs (strictly excluded from git)
     ├── scj_rag_v2.db             # Fresh SQLite production database (Zero DDL)
     ├── chunks/                   # Extracted chunk JSON files for external auditing
     ├── documents/                # Document summary JSON deliverables
@@ -152,29 +155,26 @@ Every batch ingestion must pass all 7 strict quality gates before publication:
 
 ### 6.1. Running the Automated Test Suites
 ```bash
-# Run PCE v2.0 unit and integration tests (6 tests)
-pytest PCEV2/tests/test_pipeline.py
-
-# Run full repository regression test suite (38 tests)
-pytest tests/
+# Run unit and integration tests
+pytest tests/test_pipeline.py
 ```
 
 ### 6.2. Running Batch Ingestion & Quality Gates Audit
 ```bash
 # Ingest representative sample PDFs from 1950 and 2026 into a fresh database
-python PCEV2/run_batch_ingestion.py
+python run_batch_ingestion.py
 
 # Run standalone strict quality gate certification
-python PCEV2/check_gates.py
+python check_gates.py
 ```
 
 ### 6.3. Generating PDF Reports
 ```bash
 # Compile Solutions PDF and Test Verification PDF
-python PCEV2/reports/generate_pdf_reports.py
+python reports/generate_pdf_reports.py
 
 # Compile Engineering Approach PDF
-python PCEV2/reports/generate_approach_pdf.py
+python reports/generate_approach_pdf.py
 ```
 
 ---
@@ -185,10 +185,10 @@ In production environments, PDFs stream directly from Google Cloud Storage witho
 
 ```bash
 # Ingest directly from GCS bucket for a target year
-python PCEV2/run_batch_ingestion.py --gcs --year 1950
+python run_batch_ingestion.py --gcs --year 1950
 
 # Canary test run: ingest first 10 documents from GCS
-python PCEV2/run_batch_ingestion.py --gcs --year 1950 --limit 10
+python run_batch_ingestion.py --gcs --year 1950 --limit 10
 ```
 
 `GCSDataLoader` in `storage/gcs_loader.py` handles authentication via Google Application Default Credentials (ADC) or workload identity, streams PDF blobs to isolated temporary descriptors, processes pages through the 3-stage PCE pipeline, and records the canonical `gs://` URI in `source_files.storage_path`.
