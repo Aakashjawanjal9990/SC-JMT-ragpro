@@ -1,22 +1,29 @@
+"""FastAPI entry point and composition root for the query service."""
 
-"""FastAPI entry point for the query API."""
+import asyncio
+import inspect
+import logging
+import os
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from redis.asyncio import Redis
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from app.error_handling import (
-    http_exception_handler,
-    unexpected_error_handler,
-    validation_error_handler,
-)
+from app.adapters.postgres import PostgresQueryAdapter
+from app.adapters.vertex import VertexAIAdapter
+from app.api.compat import router as compat_router
+from app.api.errors import register_error_handlers
+from app.api.routes import router
+from app.auth_service import AuthService
+from app.email import SMTPEmailSender
 from app.logging_config import configure_logging
 from app.middleware import RequestLoggingMiddleware
-from app.models import HealthResponse, QueryRequest, QueryResponse, ReadinessResponse
 from app.orchestrator import QueryOrchestrator
 from app.ports import (
-    AdapterNotConfigured,
     AnswerGenerationPort,
     RetrievalPort,
     SourceRecordPort,
@@ -24,7 +31,49 @@ from app.ports import (
     UnconfiguredRetrieval,
     UnconfiguredSourceRecords,
 )
+from app.models import QueryFilters, RetrievedPassage
+from app.retrieval.integration import create_backend_retrieval_adapter
+from app.rate_limit import RedisRateLimiter
+from app.security import OIDCVerifier
 from app.settings import Settings
+
+logger = logging.getLogger(__name__)
+
+
+class _RetrievalSlot:
+    """Stable orchestrator port whose implementation can be selected at startup."""
+
+    def __init__(self, adapter: RetrievalPort) -> None:
+        self._adapter = adapter
+
+    @property
+    def configured(self) -> bool:
+        return not isinstance(self._adapter, UnconfiguredRetrieval)
+
+    def replace(self, adapter: RetrievalPort) -> None:
+        self._adapter = adapter
+
+    async def retrieve(
+        self, question: str, filters: QueryFilters, limit: int
+    ) -> Sequence[RetrievedPassage]:
+        return await self._adapter.retrieve(question, filters, limit)
+
+    async def healthcheck(self) -> bool:
+        if not self.configured:
+            return False
+        probe = getattr(self._adapter, "healthcheck", None)
+        if probe is None:
+            return False
+        try:
+            if inspect.iscoroutinefunction(probe):
+                result = await asyncio.wait_for(probe(), timeout=3)
+            else:
+                result = await asyncio.wait_for(asyncio.to_thread(probe), timeout=3)
+                if inspect.isawaitable(result):
+                    result = await asyncio.wait_for(result, timeout=3)
+            return bool(result)
+        except Exception:
+            return False
 
 
 def create_app(
@@ -36,118 +85,276 @@ def create_app(
     """Build the API with owner-supplied adapters, or explicit unconfigured defaults."""
     resolved_settings = settings or Settings.from_environment()
     configure_logging(resolved_settings.log_level, resolved_settings.environment)
+    is_production = resolved_settings.environment.lower() in {"prod", "production"}
 
-    retrieval_adapter = (
-        retrieval if retrieval is not None else UnconfiguredRetrieval()
+    redis_client = (
+        Redis.from_url(
+            resolved_settings.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+            health_check_interval=30,
+        )
+        if resolved_settings.redis_url
+        else None
     )
+    database_engine: AsyncEngine | None = (
+        create_async_engine(
+            resolved_settings.database_url,
+            pool_pre_ping=True,
+            pool_size=3,
+            max_overflow=1,
+            pool_timeout=5,
+            pool_recycle=1800,
+            connect_args={"timeout": 5, "command_timeout": 10},
+        )
+        if resolved_settings.database_url
+        else None
+    )
+    vertex_adapter = (
+        VertexAIAdapter(resolved_settings)
+        if all(
+            (
+                resolved_settings.google_cloud_project,
+                resolved_settings.google_cloud_location,
+                resolved_settings.vertex_model_id,
+                resolved_settings.vertex_embedding_model_id,
+            )
+        )
+        else None
+    )
+    postgres_adapter = (
+        PostgresQueryAdapter(
+            database_engine,
+            vertex_adapter,
+        )
+        if database_engine and vertex_adapter and resolved_settings.vertex_embedding_model_id
+        else None
+    )
+    default_retrieval_adapter = (
+        retrieval
+        if retrieval is not None
+        else postgres_adapter or UnconfiguredRetrieval()
+    )
+    retrieval_slot = _RetrievalSlot(default_retrieval_adapter)
     source_records_adapter = (
-        source_records if source_records is not None else UnconfiguredSourceRecords()
+        source_records
+        if source_records is not None
+        else postgres_adapter or UnconfiguredSourceRecords()
     )
     answer_generation_adapter = (
         answer_generation
         if answer_generation is not None
-        else UnconfiguredAnswerGeneration()
+        else (
+            vertex_adapter
+            if vertex_adapter
+            else UnconfiguredAnswerGeneration()
+        )
     )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        active_retrieval: RetrievalPort | None = retrieval
+        if retrieval is not None:
+            warmup = getattr(retrieval, "warmup", None)
+            if warmup is not None:
+                await asyncio.to_thread(warmup)
+        elif (
+            os.getenv("RETRIEVAL_PORT_ADAPTER_ENABLED", "false").strip().lower()
+            in {"1", "true", "yes", "on"}
+        ):
+            candidate = None
+            try:
+                if database_engine is None:
+                    logger.warning(
+                        "Pratik retrieval adapter is enabled but DATABASE_URL is not configured"
+                    )
+                else:
+                    async with database_engine.connect() as connection:
+                        model_rows = (
+                            await connection.execute(
+                                text(
+                                    "SELECT provider FROM embedding_models "
+                                    "WHERE is_active = true"
+                                )
+                            )
+                        ).all()
+                        vector_count = await connection.scalar(
+                            text("SELECT count(*) FROM chunks WHERE embedding IS NOT NULL")
+                        )
+                    remote_providers = {
+                        "vertex", "vertexai", "vertex_ai", "google", "gemini", "openai"
+                    }
+                    if (
+                        len(model_rows) != 1
+                        or (model_rows[0][0] or "").strip().lower() in remote_providers
+                        or not vector_count
+                    ):
+                        logger.warning(
+                            "Pratik retrieval adapter is enabled but requires one locally "
+                            "loadable active embedding model and at least one stored vector; "
+                            "keeping the configured backend adapter"
+                        )
+                    else:
+                        candidate = create_backend_retrieval_adapter(
+                            RetrievedPassage, resolved_settings.database_url
+                        )
+                        await asyncio.to_thread(candidate.warmup)
+                        retrieval_slot.replace(candidate)
+                        active_retrieval = candidate
+                        logger.info("Pratik RetrievalPort adapter initialized and warmed up")
+            except Exception:
+                if candidate is not None:
+                    try:
+                        await asyncio.to_thread(candidate.close)
+                    except Exception:
+                        logger.exception("Failed to close incomplete retrieval adapter")
+                logger.exception(
+                    "Pratik retrieval adapter could not start; keeping the configured backend adapter"
+                )
+        try:
+            yield
+        finally:
+            if active_retrieval is not None:
+                close = getattr(active_retrieval, "close", None)
+                if close is not None:
+                    try:
+                        if inspect.iscoroutinefunction(close):
+                            await close()
+                        else:
+                            result = await asyncio.to_thread(close)
+                            if inspect.isawaitable(result):
+                                await result
+                    except Exception:
+                        logger.exception("Retrieval adapter failed to close cleanly")
+            if redis_client is not None:
+                await redis_client.aclose()
+            if database_engine is not None:
+                await database_engine.dispose()
+            if vertex_adapter is not None:
+                await vertex_adapter.close()
 
     application = FastAPI(
         title="Supreme Court Judgment Query API",
         version="1.0.0",
         description=(
-            "Evidence-grounded query API; storage, retrieval, and model "
-            "adapters are injected by their owners."
+            "Evidence-grounded query API; storage, retrieval, and model adapters "
+            "are injected by their owners."
         ),
+        docs_url=None if is_production else "/docs",
+        redoc_url=None if is_production else "/redoc",
+        openapi_url=None if is_production else "/openapi.json",
+        lifespan=lifespan,
     )
-
+    if resolved_settings.cors_origins:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(resolved_settings.cors_origins),
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+            allow_headers=[
+                "Authorization",
+                "Content-Type",
+                "X-CSRF-Token",
+                "X-Request-ID",
+            ],
+            expose_headers=["X-Request-ID"],
+        )
     application.state.query_orchestrator = QueryOrchestrator(
-        retrieval=retrieval_adapter,
+        retrieval=retrieval_slot,
         source_records=source_records_adapter,
         answer_generation=answer_generation_adapter,
+        max_context_chars=resolved_settings.max_context_chars,
     )
-
-    application.state.adapter_readiness = {
-        "retrieval": not isinstance(retrieval_adapter, UnconfiguredRetrieval),
-        "source_records": not isinstance(
-            source_records_adapter, UnconfiguredSourceRecords
-        ),
-        "answer_generation": not isinstance(
-            answer_generation_adapter, UnconfiguredAnswerGeneration
-        ),
-    }
-
-    application.add_middleware(RequestLoggingMiddleware)
-
-    # Shared error handlers for consistent, client-safe API responses.
-    application.add_exception_handler(
-        RequestValidationError,
-        validation_error_handler,
+    application.state.environment = resolved_settings.environment.lower()
+    application.state.settings = resolved_settings
+    application.state.retrieval_adapter = retrieval_slot
+    application.state.database_engine = database_engine
+    application.state.redis_client = redis_client
+    application.state.auth_service = (
+        AuthService(database_engine, redis_client, resolved_settings, SMTPEmailSender(resolved_settings))
+        if database_engine is not None and redis_client is not None
+        else None
     )
-    application.add_exception_handler(
-        StarletteHTTPException,
-        http_exception_handler,
-    )
-    application.add_exception_handler(
-        Exception,
-        unexpected_error_handler,
-    )
-
-    @application.get("/health", response_model=HealthResponse, tags=["operations"])
-    async def health() -> HealthResponse:
-        """Report whether the application process is alive."""
-        return HealthResponse()
-
-    @application.get(
-        "/ready",
-        response_model=ReadinessResponse,
-        tags=["operations"],
-    )
-    async def readiness(
-        http_request: Request,
-    ) -> ReadinessResponse | JSONResponse:
-        """Report whether required adapters are configured."""
-        dependencies: dict[str, bool] = (
-            http_request.app.state.adapter_readiness
-        )
-        ready = all(dependencies.values())
-
-        response = ReadinessResponse(
-            status="ready" if ready else "not_ready",
-            dependencies=dependencies,
-        )
-
-        if not ready:
-            return JSONResponse(
-                status_code=503,
-                content=response.model_dump(mode="json"),
+    application.state.request_timeout_seconds = resolved_settings.request_timeout_seconds
+    application.state.oidc_verifier = (
+        OIDCVerifier(resolved_settings)
+        if all(
+            (
+                resolved_settings.oidc_issuer,
+                resolved_settings.oidc_audience,
+                resolved_settings.oidc_jwks_url,
             )
-
-        return response
-
-    @application.post(
-        "/v1/query",
-        response_model=QueryResponse,
-        tags=["query"],
-    )
-    async def query(
-        request: QueryRequest,
-        http_request: Request,
-    ) -> QueryResponse:
-        """Execute a query through the existing orchestrator."""
-        orchestrator: QueryOrchestrator = (
-            http_request.app.state.query_orchestrator
         )
+        else None
+    )
+    application.state.rate_limiter = (
+        RedisRateLimiter(redis_client, resolved_settings) if redis_client else None
+    )
 
+    async def database_is_ready() -> bool:
+        if postgres_adapter is None:
+            return resolved_settings.environment.lower() == "development"
         try:
-            return await orchestrator.answer(
-                request,
-                request_id=http_request.state.request_id,
-            )
-        except AdapterNotConfigured as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="Query dependencies are not configured yet.",
-                headers={"Retry-After": "30"},
-            ) from exc
+            return await asyncio.wait_for(postgres_adapter.healthcheck(), timeout=3)
+        except Exception:
+            return False
 
+    async def adapter_is_ready(adapter: object, configured: bool) -> bool:
+        if not configured:
+            return False
+        probe = getattr(adapter, "healthcheck", None)
+        if probe is None:
+            return resolved_settings.environment.lower() == "development"
+        try:
+            return bool(await asyncio.wait_for(probe(), timeout=3))
+        except Exception:
+            return False
+
+    async def limiter_is_ready() -> bool:
+        if application.state.rate_limiter is None:
+            return resolved_settings.environment.lower() == "development"
+        try:
+            return await asyncio.wait_for(application.state.rate_limiter.healthcheck(), timeout=3)
+        except Exception:
+            return False
+
+    async def authentication_is_ready() -> bool:
+        auth_service = application.state.auth_service
+        if auth_service is not None:
+            try:
+                return await asyncio.wait_for(auth_service.healthcheck(), timeout=3)
+            except Exception:
+                return False
+        verifier = application.state.oidc_verifier
+        if verifier is None:
+            return resolved_settings.environment.lower() == "development"
+        try:
+            return await asyncio.wait_for(verifier.healthcheck(), timeout=6)
+        except Exception:
+            return False
+
+    application.state.dependency_checks = {
+        "retrieval": lambda: adapter_is_ready(retrieval_slot, retrieval_slot.configured),
+        "source_records": lambda: adapter_is_ready(
+            source_records_adapter,
+            not isinstance(source_records_adapter, UnconfiguredSourceRecords),
+        ),
+        "answer_generation": lambda: adapter_is_ready(
+            answer_generation_adapter,
+            not isinstance(answer_generation_adapter, UnconfiguredAnswerGeneration),
+        ),
+        "rate_limit_store": limiter_is_ready,
+        "database": database_is_ready,
+        "authentication": authentication_is_ready,
+    }
+    application.add_middleware(
+        RequestLoggingMiddleware,
+        strict_transport_security=is_production,
+    )
+    application.include_router(router)
+    application.include_router(compat_router)
+    register_error_handlers(application)
     return application
 
 

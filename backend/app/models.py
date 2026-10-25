@@ -2,6 +2,7 @@
 
 from datetime import date
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -17,7 +18,12 @@ class QueryFilters(BaseModel):
     @field_validator("document_ids")
     @classmethod
     def document_ids_must_be_nonempty(cls, values: list[str]) -> list[str]:
-        normalized = [value.strip() for value in values]
+        normalized: list[str] = []
+        for value in values:
+            try:
+                normalized.append(str(UUID(value.strip())))
+            except (ValueError, AttributeError) as exc:
+                raise ValueError("document_ids must contain valid judgment UUIDs") from exc
         if any(not value for value in normalized):
             raise ValueError("document_ids cannot contain blank values")
         if any(len(value) > 256 for value in normalized):
@@ -133,9 +139,7 @@ class GeneratedAnswer(BaseModel):
 
     @field_validator("answer")
     @classmethod
-    def answer_must_contain_text(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("answer must contain non-whitespace text")
+    def normalize_answer(cls, value: str) -> str:
         return value.strip()
 
 
@@ -169,7 +173,7 @@ class HealthResponse(BaseModel):
 
 class ReadinessResponse(BaseModel):
     status: Literal["ready", "not_ready"]
-    check_type: Literal["configuration_only"] = "configuration_only"
+    check_type: Literal["live"] = "live"
     dependencies: dict[str, bool]
 
 

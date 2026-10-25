@@ -13,7 +13,7 @@ from app.models import (
 )
 from app.ports import AnswerGenerationPort, RetrievalPort, SourceRecordPort
 
-MAX_CONTEXT_CHARS = 80_000
+DEFAULT_MAX_CONTEXT_CHARS = 80_000
 
 
 class QueryOrchestrator:
@@ -22,10 +22,14 @@ class QueryOrchestrator:
         retrieval: RetrievalPort,
         source_records: SourceRecordPort,
         answer_generation: AnswerGenerationPort,
+        max_context_chars: int = DEFAULT_MAX_CONTEXT_CHARS,
     ) -> None:
+        if max_context_chars < 1_000:
+            raise ValueError("max_context_chars must be at least 1000.")
         self._retrieval = retrieval
         self._source_records = source_records
         self._answer_generation = answer_generation
+        self._max_context_chars = max_context_chars
 
     async def answer(self, request: QueryRequest, request_id: str | None = None) -> QueryResponse:
         request_id = request_id or str(uuid4())
@@ -35,7 +39,7 @@ class QueryOrchestrator:
             limit=request.options.max_sources,
         )
         usable = self._usable_unique_passages(candidates)
-        usable = self._fit_context_budget(usable, MAX_CONTEXT_CHARS)
+        usable = self._fit_context_budget(usable, self._max_context_chars)
         if not usable:
             return self._insufficient(request_id, "No usable passages were retrieved.")
 
@@ -89,17 +93,17 @@ class QueryOrchestrator:
         valid_ids = {citation.citation_id for citation in citations}
         has_invalid_reference = any(item not in passages_by_id for item in generated.evidence_ids)
         has_unverified_reference = any(item not in valid_ids for item in proposed_ids)
-        limitations: list[str] = []
-        if has_invalid_reference:
-            limitations.append("One or more generated evidence references were unknown.")
-        if has_unverified_reference:
-            limitations.append("One or more cited passages could not be verified.")
+        if has_invalid_reference or has_unverified_reference:
+            return self._insufficient(
+                request_id,
+                "One or more cited passages could not be verified; "
+                "the generated answer was withheld.",
+            )
         return QueryResponse(
             request_id=request_id,
-            status="partial" if limitations else "answered",
+            status="answered",
             answer=generated.answer.strip(),
             citations=citations,
-            limitations=limitations,
         )
 
     @staticmethod

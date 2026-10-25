@@ -30,8 +30,20 @@ class AnswerGenerationPort(Protocol):
     ) -> GeneratedAnswer: ...
 
 
+class QueryEmbeddingPort(Protocol):
+    async def embed_query(self, question: str) -> Sequence[float]: ...
+
+
 class AdapterNotConfigured(RuntimeError):
     """Raised until the owning module's adapter is wired into the application."""
+
+
+class DependencyUnavailable(RuntimeError):
+    """Raised when a configured external service cannot complete an operation."""
+
+
+class UnsupportedQueryFilter(ValueError):
+    """Raised when persistence cannot safely apply a requested query filter."""
 
 
 class UnconfiguredRetrieval:

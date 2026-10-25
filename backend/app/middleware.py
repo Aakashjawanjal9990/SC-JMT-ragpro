@@ -17,8 +17,9 @@ _VALID_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 class RequestLoggingMiddleware:
     """Adds a request ID and logs method/path/status/duration, never the body."""
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, strict_transport_security: bool = False) -> None:
         self.app = app
+        self.strict_transport_security = strict_transport_security
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -46,6 +47,10 @@ class RequestLoggingMiddleware:
                     b"x-content-type-options",
                     b"referrer-policy",
                     b"cache-control",
+                    b"x-frame-options",
+                    b"content-security-policy",
+                    b"permissions-policy",
+                    b"strict-transport-security",
                 }
                 headers = [
                     (name, value)
@@ -58,8 +63,15 @@ class RequestLoggingMiddleware:
                         (b"x-content-type-options", b"nosniff"),
                         (b"referrer-policy", b"no-referrer"),
                         (b"cache-control", b"no-store"),
+                        (b"x-frame-options", b"DENY"),
+                        (b"content-security-policy", b"default-src 'none'; frame-ancestors 'none'"),
+                        (b"permissions-policy", b"camera=(), microphone=(), geolocation=()"),
                     ]
                 )
+                if self.strict_transport_security:
+                    headers.append(
+                        (b"strict-transport-security", b"max-age=31536000; includeSubDomains")
+                    )
                 message = {**message, "headers": headers}
             await send(message)
 
