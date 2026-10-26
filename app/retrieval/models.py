@@ -29,6 +29,8 @@ SOURCE_DOCUMENT_ID = "source_document_id"
 CASE_NAME = "case_name"
 DECISION_DATE = "decision_date"
 
+MAX_PAGES = 100  # backend RetrievedPassage.original_page_numbers max_length
+
 
 @dataclass(frozen=True)
 class Chunk:
@@ -63,7 +65,8 @@ class RetrievedChunk:
 
 
 def page_range(metadata: Mapping[str, Any]) -> list[int] | None:
-    """One-based pages from the inclusive page_start..page_end range, or None if invalid."""
+    """One-based pages from the inclusive page_start..page_end range, or None if invalid
+    (missing, not integers, below 1, reversed, or more than MAX_PAGES pages)."""
     start, end = metadata.get(PAGE_START), metadata.get(PAGE_END)
     if (
         not isinstance(start, int)
@@ -72,6 +75,7 @@ def page_range(metadata: Mapping[str, Any]) -> list[int] | None:
         or isinstance(end, bool)
         or start < 1
         or end < start
+        or end - start + 1 > MAX_PAGES  # checked before building the list
     ):
         return None
     return list(range(start, end + 1))

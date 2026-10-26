@@ -92,9 +92,11 @@ class SqliteVectorStore:
         self._ids: list[str] = []
         self._raw_ids: list[Any] = []  # original values, so SQLite type affinity matches
         self._metadata: list[dict[str, Any]] = []
-        vectors: list[np.ndarray] = []
-
         with self._connect() as connection:
+            # Count first so the vector matrix is allocated once and filled in place:
+            # no per-row arrays and no vstack copy (146k x 768 float32 = ~450 MB, held once).
+            (expected_rows,) = connection.execute(f"SELECT COUNT(*) FROM ({self._sql})").fetchone()
+            matrix = np.empty((expected_rows, dimensions), dtype=np.float32)
             cursor = connection.execute(self._sql)
             columns = [d[0].lower() for d in cursor.description]
             missing = [c for c in REQUIRED_COLUMNS if c not in columns]
@@ -104,21 +106,28 @@ class SqliteVectorStore:
                     f"missing {missing}. Got {columns}"
                 )
             index = {name: i for i, name in enumerate(columns)}
+            loaded = 0
             while rows := cursor.fetchmany(5000):
                 for row in rows:
-                    vectors.append(_decode_vector(row[index["embedding"]], dimensions))
+                    if loaded == expected_rows:
+                        raise RuntimeError("SQLite export changed while loading; restart to reload")
+                    matrix[loaded] = _decode_vector(row[index["embedding"]], dimensions)
                     self._raw_ids.append(row[index["chunk_id"]])
                     self._ids.append(str(row[index["chunk_id"]]))
                     self._metadata.append(self._metadata_from_row(row, index))
+                    loaded += 1
+        if loaded != expected_rows:
+            matrix = matrix[:loaded].copy()  # rows disappeared mid-load; rare, small
 
-        if not vectors:
+        if loaded == 0:
             logger.warning("SQLite chunks query returned no rows; every search will be empty")
             self._vectors = np.zeros((0, 0), dtype=np.float32)
         else:
-            matrix = np.vstack(vectors)
-            del vectors
             if metric == "cosine":
-                matrix /= np.maximum(np.linalg.norm(matrix, axis=1, keepdims=True), 1e-12)
+                # Normalize in blocks so the temporary arrays stay small.
+                for start in range(0, loaded, 10_000):
+                    block = matrix[start : start + 10_000]
+                    block /= np.maximum(np.linalg.norm(block, axis=1, keepdims=True), 1e-12)
             self._vectors = matrix
         self._row_by_id = {chunk_id: row for row, chunk_id in enumerate(self._ids)}
         if len(self._row_by_id) != len(self._ids):

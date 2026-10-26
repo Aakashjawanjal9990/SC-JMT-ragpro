@@ -50,7 +50,6 @@ logger = logging.getLogger(__name__)
 # date_from/date_to are rejected like any other unsupported field.
 SUPPORTED_FILTERS = frozenset({"document_ids"})
 MAX_PASSAGE_CHARS = 20_000  # RetrievedPassage.text max_length
-MAX_PAGES = 100  # RetrievedPassage.original_page_numbers max_length
 
 
 def _set_filter_fields(filters: Any) -> dict[str, Any]:
@@ -108,7 +107,6 @@ def passage_fields(
         or source_pdf_id is None
         or not is_citable(metadata)
         or pages is None
-        or len(pages) > MAX_PAGES
         or not chunk.text
         or len(chunk.text) > MAX_PASSAGE_CHARS
     ):
