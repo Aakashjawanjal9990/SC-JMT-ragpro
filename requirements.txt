@@ -3,11 +3,11 @@ uvicorn[standard]
 pytest
 httpx
 numpy>=2.0
-scipy>=1.11
-bm25s>=0.3,<0.4
 sqlalchemy>=2.0,<3
 pg8000>=1.31
 cloud-sql-python-connector[pg8000]>=1.18
 google-cloud-alloydb-connector[pg8000]>=1.9
 # Query embedding (CPU) and the optional cross-encoder reranker.
 sentence-transformers>=3.0
+# Vertex AI query embedding (only needed with RETRIEVAL_EMBEDDING_PROVIDER=vertex).
+google-genai>=1.0

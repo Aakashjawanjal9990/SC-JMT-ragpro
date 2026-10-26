@@ -5,7 +5,6 @@ from app.retrieval.hybrid import (
     HybridRetriever,
     RetrievalResult,
     format_context,
-    reciprocal_rank_fusion,
 )
 from app.retrieval.models import Chunk, RetrievedChunk
 
@@ -16,5 +15,4 @@ __all__ = [
     "RetrievalSettings",
     "RetrievedChunk",
     "format_context",
-    "reciprocal_rank_fusion",
 ]

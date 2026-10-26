@@ -3,3 +3,10 @@ __pycache__/
 .pytest_cache/
 *.py[cod]
 .env
+
+# Local database exports and data (never commit)
+output/
+data/
+*.db
+*.sqlite
+*.sqlite3

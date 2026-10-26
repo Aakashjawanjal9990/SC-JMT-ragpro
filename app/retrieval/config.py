@@ -37,43 +37,52 @@ def _env_float(name: str, default: float | None) -> float | None:
 
 @dataclass(frozen=True)
 class RetrievalSettings:
-    # Source of truth + dense search: "pgvector" (Cloud SQL, chunks.embedding) or
-    # "memory" (local dev/tests).
+    # Source of truth + dense search: "pgvector" (Cloud SQL, chunks.embedding),
+    # "sqlite" (ingestion team's local export, e.g. output/scj_rag_v2.db) or
+    # "memory" (exported chunks.jsonl + embeddings.npy).
     vector_store: str = "pgvector"
     source_db: DatabaseConfig = field(default_factory=DatabaseConfig)
     pg_ef_search: int | None = None  # HNSW recall/speed knob (pgvector default 40)
     pg_iterative_scan: str | None = None  # pgvector >= 0.8: relaxed_order keeps filtered k full
     metric: str = "cosine"
     vector_store_path: str | None = None  # "memory" store only
+    sqlite_path: str | None = None  # "sqlite" store only
+    sqlite_chunks_sql: str | None = None  # SELECT mapping the export's schema; see sqlite_store.py
 
-    # Query embedding. With pgvector the model comes from the active embedding_models
-    # row; RETRIEVAL_EMBEDDING_MODEL is only used by the "memory" store.
+    # Query embedding (no embedding_models table exists, so always from these settings).
+    # Must match the model that
+    # embedded the chunks: e.g. local BAAI/bge-base-en-v1.5 (query prefix
+    # "Represent this sentence for searching relevant passages: ") or Vertex
+    # text-embedding-004 (provider "vertex", no prefix).
     embedding_model: str | None = None
+    embedding_provider: str = "local"  # local | vertex
+    embedding_dimensions: int = 768
+    gcp_project: str | None = None
+    gcp_location: str = "us-central1"
     normalize_embeddings: bool = True
     query_prefix: str = ""
 
-    # Lexical search: "postgres" (own BM25 database, AlloyDB), "file" (bm25s on disk), "none".
+    # Lexical search: "postgres" (BM25 index in its own AlloyDB database, built by a
+    # separate cloud job), "memory" (built at startup from the store's chunks; local
+    # SQLite runs) or "none" (dense only).
     bm25_backend: str = "postgres"
     bm25_db: DatabaseConfig = field(default_factory=DatabaseConfig)
     bm25_schema: str = "bm25"
     bm25_postings_per_term: int = 2000
-    bm25_index_path: str | None = None  # "file" backend only
-    bm25_method: str = "lucene"  # "file" backend only
 
-    # Optional CPU cross-encoder reranker, off by default.
-    rerank: bool = False
+    # Cross-encoder that ranks the merged candidates (CPU). 256 tokens per pair keeps
+    # ~40 candidates under a second on CPU; 512 is more precise and about twice as slow.
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    reranker_max_length: int = 512
+    reranker_max_length: int = 256
 
-    top_k: int = 8
-    candidate_k: int = 50
-    rrf_k: int = 60
-    dense_weight: float = 1.0
-    bm25_weight: float = 1.0
-    max_per_doc: int | None = 3
-    min_score: float | None = None
+    top_k: int = 8  # chunks returned
+    candidate_k: int = 20  # chunks taken from EACH of vector search and BM25 before reranking
+    max_per_doc: int | None = 3  # cap per judgment; 0 = no cap
     # Deadline for one retrieve() call from the query backend, including dependencies.
     timeout_seconds: float = 10.0
+    # Require chunk/judgment/source ids to be UUIDs (production). Set false for local
+    # exports whose ids are not UUIDs.
+    require_uuids: bool = True
 
     @classmethod
     def from_environment(cls) -> "RetrievalSettings":
@@ -85,7 +94,15 @@ class RetrievalSettings:
             pg_iterative_scan=_env_str("RETRIEVAL_PG_ITERATIVE_SCAN"),
             metric=_env_str("RETRIEVAL_METRIC", defaults.metric),
             vector_store_path=_env_str("RETRIEVAL_VECTOR_STORE_PATH"),
+            sqlite_path=_env_str("RETRIEVAL_SQLITE_PATH"),
+            sqlite_chunks_sql=_env_str("RETRIEVAL_SQLITE_CHUNKS_SQL"),
             embedding_model=_env_str("RETRIEVAL_EMBEDDING_MODEL"),
+            embedding_provider=_env_str("RETRIEVAL_EMBEDDING_PROVIDER", defaults.embedding_provider),
+            embedding_dimensions=_env_int(
+                "RETRIEVAL_EMBEDDING_DIMENSIONS", defaults.embedding_dimensions
+            ),
+            gcp_project=_env_str("GCP_PROJECT"),
+            gcp_location=_env_str("GCP_LOCATION", defaults.gcp_location),
             normalize_embeddings=_env_bool(
                 "RETRIEVAL_NORMALIZE_EMBEDDINGS", defaults.normalize_embeddings
             ),
@@ -97,19 +114,13 @@ class RetrievalSettings:
             bm25_postings_per_term=_env_int(
                 "RETRIEVAL_BM25_POSTINGS_PER_TERM", defaults.bm25_postings_per_term
             ),
-            bm25_index_path=_env_str("RETRIEVAL_BM25_INDEX_PATH"),
-            bm25_method=_env_str("RETRIEVAL_BM25_METHOD", defaults.bm25_method),
-            rerank=_env_bool("RETRIEVAL_RERANK", defaults.rerank),
             reranker_model=_env_str("RETRIEVAL_RERANKER_MODEL", defaults.reranker_model),
             reranker_max_length=_env_int(
                 "RETRIEVAL_RERANKER_MAX_LENGTH", defaults.reranker_max_length
             ),
             top_k=_env_int("RETRIEVAL_TOP_K", defaults.top_k),
             candidate_k=_env_int("RETRIEVAL_CANDIDATE_K", defaults.candidate_k),
-            rrf_k=_env_int("RETRIEVAL_RRF_K", defaults.rrf_k),
-            dense_weight=_env_float("RETRIEVAL_DENSE_WEIGHT", defaults.dense_weight),
-            bm25_weight=_env_float("RETRIEVAL_BM25_WEIGHT", defaults.bm25_weight),
             max_per_doc=_env_int("RETRIEVAL_MAX_PER_DOC", defaults.max_per_doc) or None,
-            min_score=_env_float("RETRIEVAL_MIN_SCORE", None),
             timeout_seconds=_env_float("RETRIEVAL_TIMEOUT_SECONDS", defaults.timeout_seconds),
+            require_uuids=_env_bool("RETRIEVAL_REQUIRE_UUIDS", defaults.require_uuids),
         )

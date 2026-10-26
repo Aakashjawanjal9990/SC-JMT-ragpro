@@ -1,0 +1,6 @@
+# gcloud builds submit . --config bm25_builder/cloudbuild.yaml \
+#   --substitutions=_IMAGE=asia-south1-docker.pkg.dev/sc-judgments-rag/<repo>/bm25-builder
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "bm25_builder/Dockerfile", "-t", "${_IMAGE}", "."]
+images: ["${_IMAGE}"]
