@@ -10,7 +10,7 @@ always comes from chunks.content and ids/pages from the row itself.
 cannot be checked without those tables; add them to _CITABLE if they appear.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import numpy as np
@@ -49,6 +49,29 @@ FILTER_COLUMNS = {
     DOCUMENT_ID: ("c.judgment_uuid", "uuid"),
     SOURCE_PDF_ID: ("c.source_file_uuid", "uuid"),
 }
+
+
+REQUIRED_CHUNK_COLUMNS = (
+    "chunk_uuid", "judgment_uuid", "source_file_uuid", "page_start", "page_end",
+    "content", "is_active", "embedding",
+)
+
+
+def verify_schema(db: Database) -> None:
+    """Fail at startup, with a clear message, if the live schema does not match what
+    this module queries (pgvector extension and the chunks columns above)."""
+    if not db.fetch_all("SELECT 1 FROM pg_extension WHERE extname = 'vector'"):
+        raise RuntimeError("The pgvector extension is not installed (CREATE EXTENSION vector)")
+    present = {
+        row[0]
+        for row in db.fetch_all(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'chunks'"
+        )
+    }
+    missing = [column for column in REQUIRED_CHUNK_COLUMNS if column not in present]
+    if missing:
+        raise RuntimeError(f"chunks table is missing columns required by retrieval: {missing}")
 
 
 def embedding_dimensions(db: Database) -> int:
@@ -140,3 +163,20 @@ class PgVectorStore:
         )
         by_id = {chunk.id: chunk for chunk in map(_chunk_from_row, rows)}
         return [by_id[i] for i in ids if i in by_id]
+
+    def iter_chunks(self, batch_size: int = 2000) -> Iterator[Chunk]:
+        """Every active chunk, in chunk_uuid order (used to build the in-memory BM25
+        index at startup). Each batch is its own short query."""
+        after = "00000000-0000-0000-0000-000000000000"
+        while True:
+            rows = self.db.fetch_all(
+                f"""SELECT {_CHUNK_COLUMNS} FROM chunks c
+                    WHERE {_CITABLE} AND c.chunk_uuid > CAST(:after AS uuid)
+                    ORDER BY c.chunk_uuid LIMIT :n""",
+                {"after": after, "n": batch_size},
+            )
+            if not rows:
+                return
+            for row in rows:
+                yield _chunk_from_row(row)
+            after = str(rows[-1]._mapping["chunk_uuid"])

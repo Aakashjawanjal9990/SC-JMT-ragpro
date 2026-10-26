@@ -55,25 +55,27 @@ class RetrievalSettings:
     # "Represent this sentence for searching relevant passages: ") or Vertex
     # text-embedding-004 (provider "vertex", no prefix).
     embedding_model: str | None = None
-    embedding_provider: str = "local"  # local | vertex
+    embedding_provider: str = "vertex"  # vertex (google-genai) | local (optional sentence-transformers)
     embedding_dimensions: int = 768
     gcp_project: str | None = None
     gcp_location: str = "us-central1"
     normalize_embeddings: bool = True
     query_prefix: str = ""
 
-    # Lexical search: "postgres" (BM25 index in its own AlloyDB database, built by a
-    # separate cloud job), "memory" (built at startup from the store's chunks; local
-    # SQLite runs) or "none" (dense only).
-    bm25_backend: str = "postgres"
+    # Lexical search: "memory" (built at startup from the store's chunks; no extra
+    # service), "postgres" (index in a separate AlloyDB database, built by
+    # bm25_builder/) or "none" (vector search only).
+    bm25_backend: str = "memory"
     bm25_db: DatabaseConfig = field(default_factory=DatabaseConfig)
     bm25_schema: str = "bm25"
     bm25_postings_per_term: int = 2000
 
-    # Cross-encoder that ranks the merged candidates (CPU). 256 tokens per pair keeps
-    # ~40 candidates under a second on CPU; 512 is more precise and about twice as slow.
-    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    reranker_max_length: int = 256
+    # Reranker for the merged candidates: "none" (rank fusion, default), "vertex"
+    # (Vertex AI Ranking API) or "cross-encoder" (local; needs sentence-transformers).
+    reranker: str = "none"
+    reranker_model: str | None = None  # provider default if unset
+    reranker_location: str = "global"  # Vertex Ranking API location
+    reranker_max_length: int = 256  # cross-encoder only
 
     top_k: int = 8  # chunks returned
     candidate_k: int = 20  # chunks taken from EACH of vector search and BM25 before reranking
@@ -114,7 +116,9 @@ class RetrievalSettings:
             bm25_postings_per_term=_env_int(
                 "RETRIEVAL_BM25_POSTINGS_PER_TERM", defaults.bm25_postings_per_term
             ),
-            reranker_model=_env_str("RETRIEVAL_RERANKER_MODEL", defaults.reranker_model),
+            reranker=_env_str("RETRIEVAL_RERANKER", defaults.reranker),
+            reranker_model=_env_str("RETRIEVAL_RERANKER_MODEL"),
+            reranker_location=_env_str("RETRIEVAL_RERANKER_LOCATION", defaults.reranker_location),
             reranker_max_length=_env_int(
                 "RETRIEVAL_RERANKER_MAX_LENGTH", defaults.reranker_max_length
             ),

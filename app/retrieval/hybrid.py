@@ -4,7 +4,8 @@
 2. The two lists are merged (duplicates removed).
 3. BM25-only hits are re-read from the store, so text, ids, pages and the active
    check always come from the source of truth.
-4. A cross-encoder scores every candidate against the question.
+4. Candidates are ordered by the reranker if one is configured, otherwise by
+   reciprocal rank fusion of the two lists (no model needed).
 5. The best top_k are returned, at most max_per_doc per judgment.
 """
 
@@ -23,8 +24,8 @@ from app.retrieval.db import Database
 from app.retrieval.embedder import make_query_embedder
 from app.retrieval.filters import Filters
 from app.retrieval.models import DOCUMENT_ID, Chunk, RetrievedChunk, format_citation
-from app.retrieval.pg_store import PgVectorStore, embedding_dimensions
-from app.retrieval.reranker import CrossEncoderReranker
+from app.retrieval.pg_store import PgVectorStore, embedding_dimensions, verify_schema
+from app.retrieval.reranker import make_reranker
 from app.retrieval.sqlite_store import DEFAULT_CHUNKS_SQL, SqliteVectorStore
 from app.retrieval.tokenizer import tokenize
 from app.retrieval.vector_store import VectorStore, open_vector_store
@@ -45,6 +46,15 @@ class RetrievalResult:
     query: str
     chunks: list[RetrievedChunk]
     timings_ms: dict[str, float] = field(default_factory=dict)
+
+
+def rank_fusion(*rankings: Sequence[str], k: int = 60) -> dict[str, float]:
+    """Reciprocal rank fusion: score = sum of 1 / (k + rank) over the lists a chunk is in."""
+    scores: dict[str, float] = {}
+    for ids in rankings:
+        for rank, chunk_id in enumerate(ids, start=1):
+            scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (k + rank)
+    return scores
 
 
 def format_context(chunks: Sequence[RetrievedChunk]) -> str:
@@ -70,7 +80,7 @@ class HybridRetriever:
         self,
         store: VectorStore,
         embedder: Any,
-        reranker: CrossEncoderReranker,
+        reranker: Any | None = None,
         bm25: BM25Searcher | None = None,
         *,
         top_k: int = 8,
@@ -104,6 +114,7 @@ class HybridRetriever:
                 )
             source_db = Database(settings.source_db, "source database")
             databases.append(source_db)
+            verify_schema(source_db)
             store: VectorStore = PgVectorStore(
                 source_db,
                 metric=settings.metric,
@@ -161,7 +172,13 @@ class HybridRetriever:
         retriever = cls(
             store,
             embedder,
-            CrossEncoderReranker(settings.reranker_model, max_length=settings.reranker_max_length),
+            make_reranker(
+                settings.reranker,
+                model_name=settings.reranker_model,
+                max_length=settings.reranker_max_length,
+                project=settings.gcp_project,
+                location=settings.reranker_location,
+            ),
             bm25,
             top_k=settings.top_k,
             candidate_k=settings.candidate_k,
@@ -171,9 +188,10 @@ class HybridRetriever:
         return retriever
 
     def warmup(self) -> None:
-        """Load the embedding and reranker models up front so the first query is fast."""
+        """Load models / open clients up front so the first query is fast."""
         self.embedder.warmup()
-        self.reranker.warmup()
+        if self.reranker is not None:
+            self.reranker.warmup()
 
     def close(self) -> None:
         self._executor.shutdown(wait=False)
@@ -200,7 +218,8 @@ class HybridRetriever:
     def search(
         self, query: str, *, top_k: int | None = None, filters: Filters | None = None
     ) -> RetrievalResult:
-        """Best top_k chunks for the query; `score` is the cross-encoder score."""
+        """Best top_k chunks for the query. `score` is the reranker score, or the rank
+        fusion score when no reranker is configured."""
         total_start = time.perf_counter()
         top_k = self.top_k if top_k is None else top_k
         candidate_k = max(self.candidate_k, top_k)
@@ -230,12 +249,17 @@ class HybridRetriever:
             timings["total"] = _ms(total_start)
             return RetrievalResult(query, [], timings)
 
-        # 4. Rerank every candidate with the cross-encoder.
+        # 4. Order candidates: reranker if configured, else rank fusion of both lists.
         start = time.perf_counter()
         pool = list(candidates.values())
-        scores = self.reranker.score(query, [chunk.text for chunk in pool])
+        if self.reranker is not None:
+            scores = self.reranker.score(query, [chunk.text for chunk in pool])
+            timings["rerank"] = _ms(start)
+        else:
+            fused = rank_fusion([hit.id for hit in vector_hits], [cid for cid, _ in bm25_hits])
+            scores = [fused[chunk.id] for chunk in pool]
+            timings["fusion"] = _ms(start)
         ranked = sorted(zip(pool, scores), key=lambda item: -item[1])
-        timings["rerank"] = _ms(start)
 
         # 5. Best top_k, at most max_per_doc chunks per judgment.
         vector_scores = {hit.id: hit.score for hit in vector_hits}
@@ -256,7 +280,7 @@ class HybridRetriever:
                     score=score,
                     dense_score=vector_scores.get(chunk.id),
                     bm25_score=bm25_scores.get(chunk.id),
-                    rerank_score=score,
+                    rerank_score=score if self.reranker is not None else None,
                 )
             )
             if len(selected) == top_k:
