@@ -164,6 +164,8 @@ def init_database(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     try:
+        conn.execute('PRAGMA journal_mode = WAL;')
+        conn.execute('PRAGMA synchronous = NORMAL;')
         conn.executescript(SQLITE_SCHEMA_DDL)
         conn.commit()
     finally:

@@ -119,7 +119,7 @@ class CoordinateZoneExtractor:
                     if span_size <= 8.5 or re.match(r"^(?:\d+[\t\s]|\(\d+\)|[*†‡])", txt):
                         is_fn = True
                 elif ly0 >= (h - 150.0) and (
-                    span_size <= 7.5 or (is_born_digital and span_size <= 8.5 and re.match(r"^(?:\d+[\t\s]|\(\d+\)|[*†‡])", txt))
+                    span_size <= 7.5 or (span_size <= 8.8 and re.match(r"^(?:\d+[\t\s]|\(\d+\)|[*†‡])", txt))
                 ):
                     is_fn = True
 

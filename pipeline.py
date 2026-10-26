@@ -45,8 +45,8 @@ except ImportError:
 class IngestionPipeline:
     """Orchestrates layout-aware parsing, chunking, embedding, and storage."""
 
-    def __init__(self, db_url: Optional[str] = None):
-        self.loader = DatabaseLoader(db_url=db_url)
+    def __init__(self, db_url: Optional[str] = None, enable_db: bool = True):
+        self.loader = DatabaseLoader(db_url=db_url) if enable_db else None
         self.embedder = VertexEmbedder()
         self.chunker = PageChunker(
             target_chunk_chars=config.target_chunk_chars,
@@ -54,7 +54,7 @@ class IngestionPipeline:
             min_chunk_chars=config.min_chunk_chars
         )
 
-    def process_pdf(self, pdf_path: str, year: Optional[int] = None) -> DocumentRecord:
+    def process_pdf(self, pdf_path: str, year: Optional[int] = None, save_db: bool = True) -> DocumentRecord:
         """Processes a single PDF document through all 4 stages idempotently. Supports local paths and gs:// URIs."""
         temp_file_to_clean = None
         is_gcs = str(pdf_path).startswith("gs://")
@@ -178,7 +178,8 @@ class IngestionPipeline:
                 pages=pages_data,
                 chunks=all_chunks
             )
-            self.loader.save_document_record(doc_record)
+            if save_db and self.loader:
+                self.loader.save_document_record(doc_record)
 
             # Persist chunk JSON for external auditing
             chunk_json_path = config.chunks_dir / f"{doc_id}_chunks.json"
@@ -191,9 +192,9 @@ class IngestionPipeline:
                     "chunk_index": c.chunk_index,
                     "content": c.content,
                     "section": c.section,
-                    "embedding": c.embedding,
+                    "embedding_dim": len(c.embedding) if c.embedding else 0,
                     "metadata": c.metadata.__dict__
-                } for c in all_chunks], f, indent=2)
+                } for c in all_chunks], f, separators=(',', ':'))
 
             # Persist document JSON
             doc_json_path = config.documents_dir / f"{doc_id}.json"
@@ -211,7 +212,10 @@ class IngestionPipeline:
             # Finalize Tracker & Save Logs
             avg_q = sum(p.ocr_quality for p in pages_data) / max(1, len(pages_data))
             tracker.finalize(total_pages=total_pages, total_chunks=len(all_chunks), ocr_quality=avg_q)
-            export_verification_csv(config.logss_dir / "pipeline_verification_master.csv")
+            try:
+                export_verification_csv(config.logss_dir / "pipeline_verification_master.csv")
+            except Exception:
+                pass
 
         finally:
             doc.close()

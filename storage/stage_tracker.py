@@ -111,24 +111,28 @@ def export_verification_csv(log_payloads: Optional[Any] = None, year_filter: Opt
         "total_duration_sec"
     ]
 
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(headers)
-        for p in filtered:
-            stages = p.get("stages", {})
-            writer.writerow([
-                p.get("document_id"),
-                p.get("case_title"),
-                p.get("year"),
-                p.get("overall_status"),
-                p.get("total_pages"),
-                p.get("total_chunks"),
-                p.get("ocr_quality"),
-                stages.get("parsing", {}).get("status"),
-                stages.get("chunking", {}).get("status"),
-                stages.get("embedding", {}).get("status"),
-                stages.get("vector_db", {}).get("status"),
-                p.get("total_duration_sec")
-            ])
+    try:
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            for p in filtered:
+                stages = p.get("stages", {})
+                writer.writerow([
+                    p.get("document_id"),
+                    p.get("case_title"),
+                    p.get("year"),
+                    p.get("overall_status"),
+                    p.get("total_pages"),
+                    p.get("total_chunks"),
+                    p.get("ocr_quality"),
+                    stages.get("parsing", {}).get("status"),
+                    stages.get("chunking", {}).get("status"),
+                    stages.get("embedding", {}).get("status"),
+                    stages.get("vector_db", {}).get("status"),
+                    p.get("total_duration_sec")
+                ])
+    
+    except (PermissionError, OSError):
+        pass
 
     return csv_path

@@ -94,7 +94,20 @@ class PageChunker:
                 cur_conf = p_conf
 
         if cur_text:
-            chunk_groups.append((cur_text, cur_sec, cur_judge, cur_conf))
+            stripped_cur = cur_text.strip()
+            alpha_count = sum(1 for ch in stripped_cur if ch.isalpha())
+            if chunk_groups:
+                prev_text, prev_sec, prev_judge, prev_conf = chunk_groups[-1]
+                if cur_sec == prev_sec and (len(stripped_cur) < self.min_chunk_chars or alpha_count < 15):
+                    if len(prev_text) + len(stripped_cur) + 2 <= self.max_chunk_chars:
+                        chunk_groups[-1] = (prev_text + "\n\n" + stripped_cur, prev_sec, prev_judge, prev_conf)
+                    elif alpha_count >= 15:
+                        chunk_groups.append((cur_text, cur_sec, cur_judge, cur_conf))
+                elif alpha_count >= 15:
+                    chunk_groups.append((cur_text, cur_sec, cur_judge, cur_conf))
+            else:
+                if alpha_count >= 15:
+                    chunk_groups.append((cur_text, cur_sec, cur_judge, cur_conf))
 
         records = []
         for idx, (ctext, csec, cjudge, cconf) in enumerate(chunk_groups, 1):

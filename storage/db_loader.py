@@ -291,7 +291,7 @@ class DatabaseLoader:
                     "embedding_text_version": c.metadata.embedding_text_version,
                 }
 
-                emb_vec_str = f"[{','.join(f'{x:.8f}' for x in c.embedding)}]" if c.embedding else None
+                emb_vec_str = f"[{','.join(f'{x:.5f}' for x in c.embedding)}]" if c.embedding else None
                 c_params = {
                     "c_uuid": c_uuid,
                     "j_uuid": judgment_uuid,
@@ -345,7 +345,7 @@ class DatabaseLoader:
                         );
                     """), c_params)
 
-                emb_ref = json.dumps(c.embedding) if c.embedding else f"vertex_vs_{c.chunk_id}"
+                emb_ref = f"vertex_vs_{c.chunk_id}"
                 ce_uuid = str(uuid.uuid5(ns, f"ce_{c.chunk_id}"))
                 ce_params = {
                     "ce_uuid": ce_uuid,

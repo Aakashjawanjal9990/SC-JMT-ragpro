@@ -79,6 +79,22 @@ It handles two contrasting document paradigms without human intervention:
 │   ├── PARSING_CHUNKING_EMBEDDING_APPROACH.md             # Master technical specification
 │   ├── PCE_V2_SOLUTIONS_TO_RELIABILITY_REVIEW.md          # Remediation of all review defects
 │   └── PCE_V2_TEST_EXECUTION_AND_VERIFICATION_REPORT.md   # Batch testing & QA evaluation report
+├── docs/                         # Comprehensive engineering specifications & benchmark reports
+│   ├── README.md                 # Documentation index & guide
+│   ├── V1_VS_V2_PROBLEMS_AND_SOLUTIONS.md     # In-depth architectural defect remediation report
+│   ├── PCE_V2_APPROACH_AND_ARCHITECTURE.md    # Master architecture and solutions specification
+│   └── RETRIEVAL_20_QUERIES_EVALUATION.md     # 20-Query Legal QA benchmark evaluation report
+├── testing_work/                 # Standalone quality verification & audit harnesses
+│   ├── README.md                 # Usage guide for verification scripts
+│   ├── verify_proof.py           # Automated 1-command production proof harness
+│   ├── test_answer_correctness.py# 4-level ground-truth correctness benchmark
+│   ├── verify_matching_parity.py # 1:1 chunk-to-embedding parity and orphan detector
+│   └── test_doc_matching.py      # Individual judgment chunk & vector auditor
+├── retrieval_testing/            # Standalone hybrid retrieval & QA test engine
+│   ├── README.md                 # Retrieval engine usage guide
+│   ├── retrieval_engine.py       # Hybrid dense + lexical retrieval engine
+│   ├── run_20_retrieval_tests.py # Automated 20-query evaluation benchmark
+│   └── retrieval_20_results.json # Structured JSON results across 20 legal domains
 ├── reports/
 │   ├── generate_pdf_reports.py   # Publication-quality solutions & test report PDF generator
 │   └── generate_approach_pdf.py  # Publication-quality approach PDF generator

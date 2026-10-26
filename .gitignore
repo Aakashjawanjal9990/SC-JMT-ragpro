@@ -55,5 +55,9 @@ ingestion_state.json
 failed_sync_documents.json
 local_vector_store.json
 
-# Local Retrieval & QA Test Harness (EXCLUDED FROM PRODUCTION GIT)
+# Local Retrieval & Testing Work (EXCLUDED FROM PRODUCTION GIT)
 retrieval/
+retrieval_testing/
+testing_work/
+scratch/
+
