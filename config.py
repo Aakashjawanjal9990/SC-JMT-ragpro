@@ -1,7 +1,7 @@
 """
 Centralized Configuration for Supreme Court Judgment RAG Pipeline (PCE v2.0)
 Scales across 43,000+ judgments across 1950 to present.
-Compatible with legacy and modern pipeline components.
+All pipeline, retrieval, storage, and verification parameters are loaded dynamically from .env.
 """
 
 import os
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 try:
     from dotenv import load_dotenv
     PCEV2_ROOT = Path(__file__).resolve().parent
-    # Prioritize module .env, fallback to project root .env
+    # Prioritize project root .env, fallback to module .env
     if (PCEV2_ROOT / ".env").exists():
         load_dotenv(dotenv_path=PCEV2_ROOT / ".env")
     elif (PCEV2_ROOT.parent / ".env").exists():
@@ -49,7 +49,7 @@ class PipelineConfig:
     DATABASE_URL: str = resolve_database_url(PCEV2_ROOT)
     database_url: str = DATABASE_URL
     vector_mode: str = os.getenv("VECTOR_MODE", "external")
-    allow_mock_embeddings: bool = os.getenv("ALLOW_MOCK_EMBEDDINGS", "true").lower() == "true"
+    allow_mock_embeddings: bool = os.getenv("ALLOW_MOCK_EMBEDDINGS", "false").lower() in ("true", "1", "yes")
     
     # Google Cloud Platform (GCP) & Cloud Storage (GCS)
     gcp_project: str = os.getenv("GCP_PROJECT", "sc-judgments-rag-prod")
@@ -60,7 +60,9 @@ class PipelineConfig:
     # Vertex AI Embedding Engine
     embedding_model_id: str = os.getenv("EMBEDDING_MODEL_ID", "text-embedding-004")
     embedding_dimension: int = int(os.getenv("EMBEDDING_DIMENSION", "768"))
+    embedding_provider: str = os.getenv("EMBEDDING_PROVIDER", "google")
     batch_size: int = int(os.getenv("BATCH_SIZE", "64"))
+    max_retries: int = int(os.getenv("MAX_RETRIES", "3"))
 
     # Roots & Output Directories
     BASE_DIR: Path = PCEV2_ROOT
@@ -83,13 +85,31 @@ class PipelineConfig:
     target_chunk_chars: int = int(os.getenv("TARGET_CHUNK_CHARS", "1500"))
     max_chunk_chars: int = int(os.getenv("MAX_CHUNK_CHARS", "2000"))
     min_chunk_chars: int = int(os.getenv("MIN_CHUNK_CHARS", "150"))
+    min_alpha_chars: int = int(os.getenv("MIN_ALPHA_CHARS", "15"))
+    max_overlap_chars: int = int(os.getenv("MAX_OVERLAP_CHARS", "300"))
     CHUNK_OVERLAP_CHARS: int = int(os.getenv("CHUNK_OVERLAP_CHARS", "150"))
     OCR_QUALITY_FLOOR: float = float(os.getenv("OCR_QUALITY_FLOOR", "0.60"))
     LABEL_CONFIDENCE_THRESHOLD: float = float(os.getenv("LABEL_CONFIDENCE_THRESHOLD", "0.75"))
 
-    chunking_version: str = "v3.0"
-    cleaning_version: str = "v3.0"
-    embedding_version: str = "v3.0_short"
+    # Quality Verification Thresholds
+    retrieval_min_recall: float = float(os.getenv("RETRIEVAL_MIN_RECALL", "0.25"))
+    vector_norm_tolerance: float = float(os.getenv("VECTOR_NORM_TOLERANCE", "0.10"))
+    audit_sample_limit: int = int(os.getenv("AUDIT_SAMPLE_LIMIT", "500"))
+    vector_check_sample_limit: int = int(os.getenv("VECTOR_CHECK_SAMPLE_LIMIT", "50"))
+
+    # Layout Zone Thresholds
+    historical_gap_threshold: float = float(os.getenv("HISTORICAL_GAP_THRESHOLD", "15.0"))
+    digital_gap_threshold: float = float(os.getenv("DIGITAL_GAP_THRESHOLD", "13.5"))
+    header_y_max_born_digital: float = float(os.getenv("HEADER_Y_MAX_BORN_DIGITAL", "85.0"))
+    header_y_max_historical: float = float(os.getenv("HEADER_Y_MAX_HISTORICAL", "75.0"))
+
+    # Ingestion & Version Identity
+    pipeline_name: str = os.getenv("PIPELINE_NAME", "scj-data-ingestion-v3")
+    pipeline_version: str = os.getenv("PIPELINE_VERSION", "v3.0")
+    chunking_version: str = os.getenv("CHUNKING_VERSION", "v3.0")
+    cleaning_version: str = os.getenv("CLEANING_VERSION", "v3.0")
+    embedding_version: str = os.getenv("EMBEDDING_VERSION", "v3.0_short")
+    default_ingestion_workers: int = int(os.getenv("DEFAULT_INGESTION_WORKERS", "6"))
     overlap_sentences: int = 1
     recurrence_threshold: float = 0.30
 
@@ -99,7 +119,6 @@ class PipelineConfig:
         self.chunks_dir.mkdir(parents=True, exist_ok=True)
         self.documents_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
-        # Create alias folder o_p as requested by user
         (self.base_dir / "o_p").mkdir(parents=True, exist_ok=True)
 
 

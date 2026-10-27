@@ -1,6 +1,8 @@
 """
 Paragraph-Preserving Single-Page Chunker (PCE v2.0)
-Enforces Rule R2 (page_start == page_end), continuity flags, and ORDER isolation.
+Enforces Rule R2 (page_start == page_end), strict length bounds (<= max_chunk_chars),
+elimination of punctuation/noise chunks (alpha_count >= min_alpha_chars), and ORDER isolation.
+All parameters dynamically loaded from environment configuration (.env).
 """
 
 import re
@@ -8,9 +10,87 @@ from typing import List, Optional, Tuple
 try:
     from PCEV2.core.models import ChunkRecord, ChunkMetadata
     from PCEV2.parsing.structure_tracker import LawReportStructureTracker
+    from PCEV2.config import config
 except ImportError:
     from core.models import ChunkRecord, ChunkMetadata
     from parsing.structure_tracker import LawReportStructureTracker
+    from config import config
+
+
+CITATION_PROTECTION_PATTERNS = [
+    (re.compile(r"\b(v|vs|art|sec|no|ltd|co|corp|inc|ors|anr|dr|mr|mrs|ms|hon|scc|scr|air|para|cl)\.", re.IGNORECASE), r"\1_DOT_"),
+    (re.compile(r"\b([A-Z])\.", re.IGNORECASE), r"\1_DOT_"),  # J., K., C.J.
+    (re.compile(r"(\d+)\.(\d+)"), r"\1_DEC_\2"),             # Decimals: 21.5
+]
+
+
+def split_legal_sentences(text: str) -> List[str]:
+    """Splits legal text into sentences while protecting citations and abbreviations."""
+    protected = text
+    for pat, repl in CITATION_PROTECTION_PATTERNS:
+        protected = pat.sub(repl, protected)
+
+    raw_sentences = re.split(r"(?<=[.!?])\s+", protected)
+    sentences = []
+    for s in raw_sentences:
+        restored = s.replace("_DOT_", ".").replace("_DEC_", ".").strip()
+        if restored:
+            sentences.append(restored)
+    return sentences if sentences else [text.strip()]
+
+
+def split_large_paragraph(p_txt: str, target_chars: int, max_chars: int) -> List[str]:
+    """Splits a single large paragraph into sentence-bounded sub-blocks strictly <= max_chars."""
+    if len(p_txt) <= max_chars:
+        return [p_txt]
+
+    sentences = split_legal_sentences(p_txt)
+    sub_blocks = []
+    cur_block = ""
+
+    for s in sentences:
+        if len(s) > max_chars:
+            if cur_block:
+                sub_blocks.append(cur_block)
+                cur_block = ""
+            clauses = re.split(r"(?<=[;:])\s+", s)
+            for cl in clauses:
+                if len(cl) > max_chars:
+                    words = cl.split()
+                    w_block = ""
+                    for w in words:
+                        if len(w_block) + len(w) + 1 <= target_chars:
+                            w_block = f"{w_block} {w}".strip()
+                        else:
+                            if w_block:
+                                sub_blocks.append(w_block)
+                            w_block = w
+                    if w_block:
+                        sub_blocks.append(w_block)
+                elif len(cur_block) + len(cl) + 1 <= target_chars:
+                    cur_block = f"{cur_block} {cl}".strip()
+                else:
+                    if cur_block:
+                        sub_blocks.append(cur_block)
+                    cur_block = cl
+            continue
+
+        if not cur_block:
+            cur_block = s
+        elif len(cur_block) + len(s) + 1 <= target_chars:
+            cur_block = f"{cur_block} {s}"
+        elif len(cur_block) + len(s) + 1 <= max_chars:
+            cur_block = f"{cur_block} {s}"
+            sub_blocks.append(cur_block)
+            cur_block = ""
+        else:
+            sub_blocks.append(cur_block)
+            cur_block = s
+
+    if cur_block:
+        sub_blocks.append(cur_block)
+
+    return sub_blocks
 
 
 class PageChunker:
@@ -18,13 +98,17 @@ class PageChunker:
 
     def __init__(
         self,
-        target_chunk_chars: int = 1500,
-        max_chunk_chars: int = 2000,
-        min_chunk_chars: int = 150
+        target_chunk_chars: Optional[int] = None,
+        max_chunk_chars: Optional[int] = None,
+        min_chunk_chars: Optional[int] = None,
+        min_alpha_chars: Optional[int] = None,
+        max_overlap_chars: Optional[int] = None
     ):
-        self.target_chunk_chars = target_chunk_chars
-        self.max_chunk_chars = max_chunk_chars
-        self.min_chunk_chars = min_chunk_chars
+        self.target_chunk_chars = target_chunk_chars or getattr(config, "target_chunk_chars", 1500)
+        self.max_chunk_chars = max_chunk_chars or getattr(config, "max_chunk_chars", 2000)
+        self.min_chunk_chars = min_chunk_chars or getattr(config, "min_chunk_chars", 150)
+        self.min_alpha_chars = min_alpha_chars or getattr(config, "min_alpha_chars", 15)
+        self.max_overlap_chars = max_overlap_chars or getattr(config, "max_overlap_chars", 300)
 
     def chunk_page(
         self,
@@ -42,7 +126,7 @@ class PageChunker:
         margin_notes: Optional[List[str]] = None,
         page_header: Optional[str] = None
     ) -> List[ChunkRecord]:
-        """Splits page text into deterministic single-page chunks."""
+        """Splits page text into deterministic single-page chunks with dynamic size & noise bounds."""
         if not cleaned_text or not cleaned_text.strip():
             return []
 
@@ -63,14 +147,34 @@ class PageChunker:
         if not classified:
             return []
 
+        # Split oversized paragraphs (> max_chunk_chars) into sentence-bounded sub-blocks
+        expanded_classified: List[Tuple[str, str, Optional[str], float]] = []
+        for p_txt, p_sec, p_judge, p_conf in classified:
+            if len(p_txt) > self.max_chunk_chars:
+                sub_parts = split_large_paragraph(p_txt, self.target_chunk_chars, self.max_chunk_chars)
+                for sp in sub_parts:
+                    expanded_classified.append((sp, p_sec, p_judge, p_conf))
+            else:
+                expanded_classified.append((p_txt, p_sec, p_judge, p_conf))
+
         chunk_groups: List[Tuple[str, str, Optional[str], float]] = []
         cur_text = ""
         cur_sec = ""
         cur_judge = None
         cur_conf = 0.50
 
-        for p_txt, p_sec, p_judge, p_conf in classified:
+        for p_txt, p_sec, p_judge, p_conf in expanded_classified:
+            p_alpha = sum(1 for ch in p_txt if ch.isalpha())
+
             if not cur_text:
+                if p_alpha < self.min_alpha_chars and chunk_groups:
+                    prev_t, prev_s, prev_j, prev_c = chunk_groups[-1]
+                    if len(prev_t) + len(p_txt) + 2 <= self.max_chunk_chars:
+                        chunk_groups[-1] = (f"{prev_t}\n\n{p_txt}", prev_s, prev_j, prev_c)
+                    continue
+                elif p_alpha < self.min_alpha_chars:
+                    continue
+
                 cur_text = p_txt
                 cur_sec = p_sec
                 cur_judge = p_judge
@@ -81,14 +185,28 @@ class PageChunker:
             ):
                 cur_text += "\n\n" + p_txt
             else:
-                chunk_groups.append((cur_text, cur_sec, cur_judge, cur_conf))
-                # Trailing 1-sentence overlap only if section and judge are the same
+                # Flush cur_text if valid
+                c_alpha = sum(1 for ch in cur_text if ch.isalpha())
+                if c_alpha >= self.min_alpha_chars:
+                    chunk_groups.append((cur_text, cur_sec, cur_judge, cur_conf))
+                elif chunk_groups:
+                    prev_t, prev_s, prev_j, prev_c = chunk_groups[-1]
+                    if len(prev_t) + len(cur_text) + 2 <= self.max_chunk_chars:
+                        chunk_groups[-1] = (f"{prev_t}\n\n{cur_text}", prev_s, prev_j, prev_c)
+
+                # Overlap handling: strictly require valid sentence with >= min_alpha_chars
                 if cur_sec == p_sec and cur_judge == p_judge:
                     sentences = re.split(r"(?<=[.!?])\s+", cur_text)
-                    overlap = sentences[-1] if len(sentences) > 1 and len(sentences[-1]) < 300 else ""
-                    cur_text = (overlap + "\n\n" + p_txt).strip() if overlap else p_txt
+                    last_s = sentences[-1] if len(sentences) > 1 and len(sentences[-1]) < self.max_overlap_chars else ""
+                    overlap = last_s if (last_s and sum(1 for ch in last_s if ch.isalpha()) >= self.min_alpha_chars) else ""
+                    candidate = (overlap + "\n\n" + p_txt).strip() if overlap else p_txt
+                    if len(candidate) <= self.max_chunk_chars:
+                        cur_text = candidate
+                    else:
+                        cur_text = p_txt
                 else:
                     cur_text = p_txt
+
                 cur_sec = p_sec
                 cur_judge = p_judge
                 cur_conf = p_conf
@@ -98,15 +216,15 @@ class PageChunker:
             alpha_count = sum(1 for ch in stripped_cur if ch.isalpha())
             if chunk_groups:
                 prev_text, prev_sec, prev_judge, prev_conf = chunk_groups[-1]
-                if cur_sec == prev_sec and (len(stripped_cur) < self.min_chunk_chars or alpha_count < 15):
+                if cur_sec == prev_sec and (len(stripped_cur) < self.min_chunk_chars or alpha_count < self.min_alpha_chars):
                     if len(prev_text) + len(stripped_cur) + 2 <= self.max_chunk_chars:
                         chunk_groups[-1] = (prev_text + "\n\n" + stripped_cur, prev_sec, prev_judge, prev_conf)
-                    elif alpha_count >= 15:
+                    elif alpha_count >= self.min_alpha_chars:
                         chunk_groups.append((cur_text, cur_sec, cur_judge, cur_conf))
-                elif alpha_count >= 15:
+                elif alpha_count >= self.min_alpha_chars:
                     chunk_groups.append((cur_text, cur_sec, cur_judge, cur_conf))
             else:
-                if alpha_count >= 15:
+                if alpha_count >= self.min_alpha_chars:
                     chunk_groups.append((cur_text, cur_sec, cur_judge, cur_conf))
 
         records = []
@@ -132,9 +250,11 @@ class PageChunker:
                 footnotes=footnotes or [],
                 margin_notes=margin_notes or [],
                 page_header=page_header,
-                chunking_version="v3.0",
-                cleaning_version="v3.0",
-                embedding_text_version="v3.0_short"
+                parent_page_number=page_number,
+                chunk_type="child",
+                chunking_version=getattr(config, "chunking_version", "v3.0"),
+                cleaning_version=getattr(config, "cleaning_version", "v3.0"),
+                embedding_text_version=getattr(config, "embedding_version", "v3.0_short")
             )
 
             records.append(ChunkRecord(

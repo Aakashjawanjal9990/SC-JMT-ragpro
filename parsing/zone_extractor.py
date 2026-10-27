@@ -1,6 +1,9 @@
 """
 Layout and Coordinate-Aware Page Zone Extractor (PCE v2.0)
 Classifies physical zones (headers, margins, body, footnotes) using PyMuPDF dict mode.
+Guarantees removal of vertical margin locator letters (A-H), true OCR quality scoring,
+and image-only page status recognition.
+All coordinate thresholds dynamically loaded from environment configuration (.env).
 """
 
 import re
@@ -8,8 +11,61 @@ import unicodedata
 from typing import List, Tuple, Optional, Any
 try:
     from PCEV2.core.models import ExtractedPageZones
+    from PCEV2.config import config
 except ImportError:
     from core.models import ExtractedPageZones
+    from config import config
+
+
+COMMON_LEGAL_WORDS = {
+    "the", "of", "and", "to", "in", "that", "is", "was", "for", "it", "with", "as", "by",
+    "on", "be", "at", "this", "which", "or", "from", "an", "are", "court", "act", "order",
+    "appeal", "judgment", "state", "case", "section", "high", "person", "law", "petitioner",
+    "respondent", "appellant", "criminal", "civil", "union", "india", "supreme", "bench",
+    "trial", "evidence", "held", "judge", "division", "constitution", "article", "rule",
+    "rights", "learned", "counsel", "justice", "session", "police", "accused", "magistrate",
+    "under", "within", "without", "having", "where", "between", "provisions", "before",
+    "after", "during", "because", "against", "said", "facts", "question", "ground",
+    "notice", "writ", "record", "period", "dated", "filed", "passed", "suit", "decree",
+    "property", "claim", "party", "parties", "right", "public", "government", "officer",
+    "power", "jurisdiction", "hearing", "application", "decision", "bench", "statutory",
+    "fine", "sentence", "conviction", "acquittal", "witness", "statements", "examination",
+    "cross", "prosecution", "defence", "offence", "penal", "code", "procedure", "clause",
+    "sub", "para", "paragraph", "held", "view", "also", "not", "any", "all", "has", "had",
+    "have", "been", "would", "could", "should", "may", "can", "their", "there", "other",
+    "such", "into", "more", "no", "if", "out", "up", "so", "what", "its", "about", "who",
+    "they", "will", "one", "all", "we", "he", "she", "him", "her", "his", "them", "these",
+    "those", "only", "then", "when", "some", "time", "very", "even", "most", "first",
+    "two", "three", "four", "five", "new", "same", "over", "such", "than", "now", "well"
+}
+
+
+def calculate_ocr_quality(text: str, is_born_digital: bool) -> float:
+    """Calculates continuous OCR quality based on character validity and dictionary ratio."""
+    stripped = text.strip()
+    if not stripped:
+        return 0.0
+
+    words = re.findall(r"\b[A-Za-z]{2,}\b", stripped.lower())
+    if not words:
+        return 0.10
+
+    dict_hits = sum(1 for w in words if w in COMMON_LEGAL_WORDS)
+    dict_ratio = dict_hits / len(words)
+
+    # Printable character ratio
+    total_chars = len(stripped)
+    printable_chars = sum(1 for ch in stripped if ch.isprintable() and not ch.isspace())
+    char_ratio = printable_chars / max(1, total_chars)
+
+    # Composite score
+    composite = (dict_ratio * 0.75) + (char_ratio * 0.25)
+    if is_born_digital:
+        score = min(1.0, max(0.85, 0.85 + (dict_ratio * 0.15)))
+    else:
+        score = min(0.98, max(0.10, composite * 1.1))
+
+    return round(score, 4)
 
 
 class CoordinateZoneExtractor:
@@ -35,6 +91,34 @@ class CoordinateZoneExtractor:
     INLINE_MARGIN_YEARS = re.compile(r"\b(?:I9l50|l950|ll950|19ll0|i980|1915\(\)|1960)\b", re.IGNORECASE)
 
     @classmethod
+    def heal_ocr_degradations(cls, text: str) -> str:
+        """Heals common legal OCR scanning degradations before chunking and embedding."""
+        if not text:
+            return ""
+        # 1. Reconnect broken hyphenated line-wraps: "restrain- ing" -> "restraining"
+        text = re.sub(r'(\b[a-zA-Z]{3,})-\s+([a-zA-Z]{3,}\b)', r'\1\2', text)
+        
+        # 2. Repair common OCR split: "on! y" -> "only"
+        text = re.sub(r'\bon!\s*y\b', 'only', text)
+        
+        # 3. Repair exclamation/digit in "provisions": "prov!Slons" -> "provisions"
+        text = re.sub(r'\bprov[!1l|][Ss]l?ons\b', 'provisions', text, flags=re.IGNORECASE)
+        
+        # 4. Repair OCR corruption: "petlt10ners" -> "petitioners"
+        text = re.sub(r'\bpet[l!1][t1][l!1]?1?0?ners\b', 'petitioners', text, flags=re.IGNORECASE)
+        
+        # 5. General digit-inside-word repair: 0 (zero) between alphabetic letters -> 'o'
+        text = re.sub(r'(?<=[a-zA-Z])0(?=[a-zA-Z])', 'o', text)
+
+        # 6. Repair citation OCR bracket mismatches and reporter letter substitutions
+        text = re.sub(r'^[(\[]\s*(\d{4})\s*[)\]]', r'[\1]', text)
+        text = re.sub(r'\bF\.[O0]\.R\b', 'F.C.R.', text)
+        text = re.sub(r'\bA\.[l|]R\b', 'A.I.R.', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bS\.\s*C\.\s*R\b', 'S.C.R.', text)
+        
+        return text
+
+    @classmethod
     def extract_page_zones(
         cls,
         page: Any,
@@ -46,12 +130,13 @@ class CoordinateZoneExtractor:
         d = page.get_text("dict")
         w, h = page.rect.width, page.rect.height
 
+        year = int(document_id.split("_")[0]) if document_id and document_id.split("_")[0].isdigit() else 2026
         is_historical = bool(
-            "1950" in document_id or "1951" in document_id or
-            (not ("2026" in document_id or "INSC" in document_id) and w < 500 and h < 750)
+            ("1950" in document_id or "1951" in document_id or year < 1980) and
+            (w < 500 and h < 750)
         )
         is_born_digital = bool(
-            ("2026" in document_id or "INSC" in document_id) or
+            ("2026" in document_id or "INSC" in document_id or year >= 1990) or
             (not is_historical and w > 450)
         )
         is_1950 = is_historical
@@ -66,8 +151,6 @@ class CoordinateZoneExtractor:
         body_lines: List[Tuple[float, float, str]] = []
 
         # 1. Detect horizontal vector drawing rule line for footnotes
-        # Must be left-aligned near text margin (x0 <= 75.0), in bottom region, with width <= 220.0 pt
-        # (Centered lines with x0 > 100 are section/case dividers, not footnote lines)
         rule_y: Optional[float] = None
         for dr in page.get_drawings():
             r = dr.get("rect")
@@ -75,7 +158,7 @@ class CoordinateZoneExtractor:
                 rule_y = r.y0
                 break
 
-        header_y_max = 85.0 if is_born_digital else 75.0
+        header_y_max = getattr(config, "header_y_max_born_digital", 85.0) if is_born_digital else getattr(config, "header_y_max_historical", 75.0)
 
         for b in d.get("blocks", []):
             if "lines" not in b:
@@ -127,6 +210,15 @@ class CoordinateZoneExtractor:
                     footnote_lines.append(txt)
                     continue
 
+                # Top bare numbers (page numbers or volume running heads)
+                if ly1 <= header_y_max and re.match(r"^\s*\d{1,4}\s*$", txt):
+                    continue
+
+                # SCR Margin paragraph locator letters (A, B, C, D, E, F, G, H)
+                if re.match(r"^\s*[A-H]\s*$", txt):
+                    margin_lines.append(txt)
+                    continue
+
                 # Margin Column Check for 1950 Historical Volumes
                 if is_1950:
                     kept_spans = []
@@ -164,13 +256,14 @@ class CoordinateZoneExtractor:
         # Reconstruct body paragraphs using vertical gap thresholds
         paras: List[str] = []
         cur_p: List[str] = []
-        gap_thresh = 15.0 if is_1950 else 13.5
+        gap_thresh = getattr(config, "historical_gap_threshold", 15.0) if is_1950 else getattr(config, "digital_gap_threshold", 13.5)
 
         for i, (l_y0, l_y1, l_txt) in enumerate(body_lines):
             if cur_p:
                 prev_y0, prev_y1, _ = body_lines[i - 1]
                 if (l_y0 - prev_y1) > gap_thresh:
-                    paras.append("\n".join(cur_p))
+                    # Natural line wrap within paragraph joined with space
+                    paras.append(" ".join(cur_p))
                     cur_p = [l_txt]
                 else:
                     cur_p.append(l_txt)
@@ -178,7 +271,7 @@ class CoordinateZoneExtractor:
                 cur_p.append(l_txt)
 
         if cur_p:
-            paras.append("\n".join(cur_p))
+            paras.append(" ".join(cur_p))
 
         cleaned_body = "\n\n".join(paras)
 
@@ -187,13 +280,48 @@ class CoordinateZoneExtractor:
         cleaned_body = re.sub(r"(?im)^\s*[.\-–—,;'~`\s]*\s*SUPR[E!]+ME\s+[CO0]{1,2}UR[T1\']+\s+REPORTS?\s*$", " ", cleaned_body)
         cleaned_body = re.sub(r"(?im)^\s*\[19[56]\d\]\s*(?:\d+\s+)?S\.?C\.?R\.?\s*$", " ", cleaned_body)
         cleaned_body = re.sub(r"(?m)^\s*\d{1,2}\s*[-–]\s*[A-Za-z]\s*$", " ", cleaned_body)
-        cleaned_body = re.sub(r"(?m)^\s*\d{1,4}\s*$", " ", cleaned_body)
+        cleaned_body = re.sub(r"(?m)^\s*\d{1,4}\s*$\n?", "", cleaned_body)
+        cleaned_body = re.sub(r"(?m)^\s*[A-H]\s*$\n?", "", cleaned_body)
         if page_number > 1:
             cleaned_body = re.sub(r"(?i)\b[CO]hiranjit\s*lal\s*Chowd[hk]uri\b.*?(?:Others\.?|India)\s*", " ", cleaned_body)
 
+        # Third-pass: Legal OCR degradation healing (repairs petlt10ners, on! y, prov!Slons, etc.)
+        cleaned_body = cls.heal_ocr_degradations(cleaned_body)
         cleaned_body = re.sub(r"[ \t]{2,}", " ", cleaned_body).strip()
+
+        # Filter any paragraph that is solely residual margin letters, stray page numbers, or whitespace
+        filtered_paras: List[str] = []
+        for p in cleaned_body.split("\n\n"):
+            p_strip = p.strip()
+            if not p_strip:
+                continue
+            # Filter paragraphs that are solely bare numbers (stray page numbers or collation numbers)
+            if re.match(r"^\s*\d{1,4}\s*$", p_strip):
+                continue
+            # Strip any leading bare number line at paragraph beginning
+            p_strip = re.sub(r"^\s*\d{1,4}\s*\n+", "", p_strip).strip()
+            if not p_strip:
+                continue
+            residual = re.sub(r"[\sA-Ha-h]", "", p_strip)
+            if not residual:
+                continue
+            filtered_paras.append(p_strip)
+
+        cleaned_body = "\n\n".join(filtered_paras).strip()
         hdr_str = " | ".join(header_lines) if header_lines else None
-        ocr_q = 0.99 if is_born_digital else 0.88
+
+        # Determine extraction method and actual OCR quality
+        images = page.get_images() if hasattr(page, "get_images") else []
+        if not cleaned_body:
+            if images:
+                ext_method = "image_only_pending_ocr"
+                ocr_q = 0.0
+            else:
+                ext_method = "verified_blank"
+                ocr_q = 1.0
+        else:
+            ext_method = "pymupdf_vector" if is_born_digital else "pymupdf_ocr"
+            ocr_q = calculate_ocr_quality(cleaned_body, is_born_digital=is_born_digital)
 
         return ExtractedPageZones(
             page_number=page_number,
@@ -203,5 +331,6 @@ class CoordinateZoneExtractor:
             margin_notes=margin_lines,
             footnotes=footnote_lines,
             is_born_digital=is_born_digital,
-            ocr_quality=ocr_q
+            ocr_quality=ocr_q,
+            extraction_method=ext_method
         )

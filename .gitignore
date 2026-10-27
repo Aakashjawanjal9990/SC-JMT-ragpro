@@ -48,6 +48,8 @@ output/
 o_p/
 data/
 PCEV2/
+rag_verification/reports/
+reports/generated/
 tests/fixtures/
 *.pdf
 *.log
@@ -61,3 +63,5 @@ retrieval_testing/
 testing_work/
 scratch/
 
+# Verification run reports
+rag_verification/reports/

@@ -35,6 +35,7 @@ class ExtractedPageZones:
     footnotes: List[str] = field(default_factory=list)
     is_born_digital: bool = False
     ocr_quality: float = 0.95
+    extraction_method: str = "pymupdf_vector"
 
 
 @dataclass
@@ -50,6 +51,8 @@ class ChunkMetadata:
     footnotes: List[str] = field(default_factory=list)
     margin_notes: List[str] = field(default_factory=list)
     page_header: Optional[str] = None
+    parent_page_number: Optional[int] = None
+    chunk_type: str = "child"
     chunking_version: str = "v3.0"
     cleaning_version: str = "v3.0"
     embedding_text_version: str = "v3.0_short"
@@ -82,4 +85,3 @@ class DocumentRecord:
     metadata: PageMetadata
     pages: List[ExtractedPageZones] = field(default_factory=list)
     chunks: List[ChunkRecord] = field(default_factory=list)
-

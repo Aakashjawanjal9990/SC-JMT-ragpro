@@ -1,11 +1,14 @@
 # Production Dependencies for Supreme Court Judgment RAG Pipeline (PCE v2.0)
-# Compatible with Python 3.10+ on Linux and GCP Cloud Run / GCE
+# Compatible with Python 3.10+ on Linux and Windows AMD64
 
-# Core PDF Extraction & Parsing
+# Core PDF Extraction & Local OCR
 PyMuPDF==1.24.9
 pytesseract==0.3.13
+paddlepaddle>=2.6.0
+paddleocr>=2.7.0
 Pillow==10.4.0
 reportlab==4.5.1
+openpyxl>=3.1.0
 
 # Data Modeling, Contracts & Resilience
 pydantic==2.13.4
@@ -27,4 +30,3 @@ google-auth>=2.28.0
 # Testing & Quality
 pytest==9.1.1
 tqdm==4.68.4
-
