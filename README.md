@@ -1,21 +1,74 @@
-# Nyaya-Mitra frontend
+# Nyaya-Mitra Frontend
 
-React 18 + Vite + React Router. Talks to a FastAPI backend over JSON.
-No mock data: every screen needs a running backend.
+React-based frontend for Nyaya-Mitra, a legal research application
+that communicates with a FastAPI backend.
 
-## Run
+## Tech Stack
 
-    cp .env.example .env      # Windows PowerShell: Copy-Item .env.example .env
-    # then set VITE_API_URL
-    npm ci
-    npm run dev
+- React 18
+- Vite
+- React Router
+- JavaScript and CSS
+- Nginx for production serving
+- Docker for containerization
 
-## Scripts
+## Prerequisites
 
-- `npm run dev` / `npm run build` / `npm run preview`
-- `npm run lint`, `npm run format`, `npm run format:check`
+- Node.js 22.x
+- npm
+- Access to a running backend API
 
-A production build fails unless `VITE_API_URL` is an `https://` URL.
+## Local Development
 
-**Security note:** never put passwords, API secrets or private keys in
-`VITE_*` variables. Everything in them ends up in the browser bundle.
+1. Clone the repository.
+2. Install dependencies:
+
+   npm ci
+
+3. Create your local environment file:
+
+   Copy-Item .env.example .env
+
+4. Set VITE_API_URL in .env to your backend API URL.
+
+5. Start the development server:
+
+   npm run dev
+
+## Available Scripts
+
+- npm run dev - Start development server
+- npm run build - Build production assets
+- npm run preview - Preview production build
+- npm run lint - Run ESLint
+- npm run format - Format files with Prettier
+- npm run format:check - Check formatting
+
+## Docker
+
+Build the frontend image from the repository root:
+
+docker build -f Dockerfile.frontend \
+--build-arg VITE_API_URL=https://your-api-host/api \
+-t nyaya-mitra-frontend .
+
+Replace the example API URL with the approved backend URL.
+
+Run the container:
+
+docker run --rm -p 8080:8080 nyaya-mitra-frontend
+
+Open http://localhost:8080.
+
+## Security
+
+- Never commit .env files or credentials.
+- Never expose API secrets through VITE_* variables.
+- Enforce authentication and authorization in the backend.
+- Configure CORS and CSRF protection on the backend.
+- Review dependency vulnerabilities before deployment.
+
+## CI
+
+GitHub Actions checks formatting, linting, dependencies,
+and the production build on pushes and pull requests.

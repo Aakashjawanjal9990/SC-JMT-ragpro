@@ -1,17 +1,21 @@
-.venv/
-__pycache__/
-.pytest_cache/
-*.py[cod]
+# Dependencies and build output
 node_modules/
 dist/
 .vite/
+
+# Environment variables and secrets
 .env
 .env.*
 !.env.example
+
+# Logs and local machine files
 *.log
 .DS_Store
 .vscode/
+
+# Local archives
 *.zip
-test_server.py
-test_server_cookies.py   
+
 docs/
+test_server_cookies.py
+test_server.py
