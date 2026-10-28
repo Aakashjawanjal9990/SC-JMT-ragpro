@@ -173,6 +173,6 @@ def init_database(db_path: Path) -> None:
 
 if __name__ == "__main__":
     import sys
-    target = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("PCEV2/output/scj_rag_v2.db")
+    target = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("output/scj_rag_v2.db")
     init_database(target)
     print(f"Initialized clean schema in: {target}")

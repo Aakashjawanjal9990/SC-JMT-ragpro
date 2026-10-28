@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 class PageMetadata:
     """Document-level legal metadata extracted primarily from page 1."""
     case_number: Optional[str] = None
+    case_title: Optional[str] = None
     appellant: Optional[str] = None
     respondent: Optional[str] = None
     date_of_judgment: Optional[str] = None

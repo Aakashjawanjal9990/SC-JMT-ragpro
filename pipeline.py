@@ -93,7 +93,12 @@ class IngestionPipeline:
             parts = doc_id.split("_")
             year = int(parts[0]) if parts and parts[0].isdigit() else 2026
 
-        tracker = DocumentStageTracker(document_id=doc_id, year=year)
+        tracker = DocumentStageTracker(
+            document_id=doc_id,
+            file_path=str(active_path),
+            year=year,
+            case_title="Supreme Court Judgment"
+        )
 
         try:
             tracker.start_stage("provenance")
@@ -106,6 +111,7 @@ class IngestionPipeline:
             # Extract Global Document Metadata
             doc_meta = LegalMetadataExtractor.extract_metadata_from_pdf(active_path, doc_id=doc_id)
             case_title = doc_meta.case_title or "Supreme Court Judgment"
+            tracker.case_title = case_title
             tracker.complete_stage("provenance")
 
             # -------------------------------------------------------------
@@ -315,6 +321,20 @@ class IngestionPipeline:
                 export_verification_csv(config.logss_dir / "pipeline_verification_master.csv")
             except Exception as e:
                 logger.warning(f"Failed to export verification CSV: {e}")
+
+        except Exception as e:
+            logger.error(f"Pipeline error processing {doc_id}: {e}")
+            tracker.finalize(
+                total_pages=total_pages if "total_pages" in locals() else 0,
+                total_chunks=len(all_chunks) if "all_chunks" in locals() else 0,
+                ocr_quality=0.0,
+                error=str(e)
+            )
+            try:
+                export_verification_csv(config.logss_dir / "pipeline_verification_master.csv")
+            except Exception:
+                pass
+            raise e
 
         finally:
             if doc is not None:

@@ -16,11 +16,11 @@ import sqlalchemy as sa
 from sqlalchemy import create_engine, text
 
 try:
-    from PCEV2.core.models import DocumentRecord
-    from PCEV2.config import config
-except ImportError:
     from core.models import DocumentRecord
     from config import config
+except ImportError:
+    from PCEV2.core.models import DocumentRecord
+    from PCEV2.config import config
 
 
 class DatabaseLoader:

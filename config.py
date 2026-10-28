@@ -22,17 +22,24 @@ try:
     else:
         load_dotenv()
 except ImportError:
-    PCEV2_ROOT = Path(__file__).resolve().parent
+    pass
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+PCEV2_ROOT = PROJECT_ROOT
 
 
-def resolve_database_url(pcev2_root: Optional[Path] = None, target: Optional[str] = None) -> str:
+def resolve_database_url(
+    pcev2_root: Optional[Path] = None,
+    target: Optional[str] = None,
+    project_root: Optional[Path] = None
+) -> str:
     """
     Resolves database URL from DATABASE_TARGET, DATABASE_URL, or individual DB_* credentials.
     Uses URL-encoding (quote_plus) to safely handle reserved characters (e.g., '@' in passwords).
     Enforces configurable TLS sslmode policy for remote PostgreSQL / AlloyDB connections.
     Defaults safely to local SQLite in output/scj_rag_v2.db when no cloud credentials provided.
     """
-    root = pcev2_root or PCEV2_ROOT
+    root = project_root or pcev2_root or PROJECT_ROOT
     active_target = (target or os.getenv("DATABASE_TARGET", "")).lower()
     sslmode = os.getenv("DB_SSLMODE", "prefer")
 
