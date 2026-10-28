@@ -1,8 +1,7 @@
 """Groq chat client from Pratik's retrieval branch."""
 
 import threading
-
-from groq import APITimeoutError, Groq
+from typing import Any
 
 
 class GroqChat:
@@ -22,12 +21,14 @@ class GroqChat:
         self.timeout_seconds = timeout_seconds
         self.reasoning_effort = reasoning_effort
         self._api_key = api_key
-        self._client: Groq | None = None
+        self._client: Any | None = None
         self._lock = threading.Lock()
 
-    def _get_client(self) -> Groq:
+    def _get_client(self) -> Any:
         with self._lock:
             if self._client is None:
+                from groq import Groq
+
                 self._client = Groq(
                     api_key=self._api_key,
                     timeout=self.timeout_seconds,
@@ -39,6 +40,8 @@ class GroqChat:
         self._get_client()
 
     def complete(self, system: str, user: str) -> str:
+        from groq import APITimeoutError
+
         extra = {}
         if self.reasoning_effort:
             extra = {"reasoning_effort": self.reasoning_effort, "include_reasoning": False}
