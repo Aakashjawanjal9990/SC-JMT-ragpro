@@ -1,32 +1,29 @@
 """
 Batch Ingestion and Quality Certification Harness (PCE v2.0)
 Processes Supreme Court judgment PDFs (1950 historical scans & 2026 digital) into production database.
-Supports high-throughput parallel multiprocessing across 6,000+ judgments with strict quality certification.
+Supports high-throughput parallel multiprocessing across 43,000+ judgments with strict quality certification.
 """
 
 import os
 import sys
 import time
 import shutil
+import logging
 import argparse
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 
+logger = logging.getLogger("BatchIngestion")
+
+# Add repo root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
-try:
-    from config import config
-    from storage.init_db import init_database
-    from pipeline import IngestionPipeline
-    from check_gates import check_all_gates
-    from storage.gcs_loader import GCSDataLoader
-except ImportError:
-    from PCEV2.config import config
-    from PCEV2.storage.init_db import init_database
-    from PCEV2.pipeline import IngestionPipeline
-    from PCEV2.check_gates import check_all_gates
-    from PCEV2.storage.gcs_loader import GCSDataLoader
+from config import config, resolve_database_url
+from storage.init_db import init_database
+from pipeline import IngestionPipeline
+from storage.gcs_loader import GCSDataLoader
+from audit_quality import QualityAuditor, run_quality_audit
 
 
 def worker_process_pdf(args):
@@ -34,22 +31,25 @@ def worker_process_pdf(args):
     pdf_path, yr = args
     try:
         pipeline = IngestionPipeline(enable_db=False)
-        return pipeline.process_pdf(pdf_path, year=yr, save_db=False)
+        rec = pipeline.process_pdf(pdf_path, year=yr, save_db=False)
+        if rec is None:
+            return {"success": False, "record": None, "error": "Pipeline returned None", "file": pdf_path}
+        return {"success": True, "record": rec, "error": None, "file": pdf_path}
     except Exception as e:
-        print(f"[WORKER ERROR] Failed on {Path(pdf_path).name}: {e}")
-        return None
+        return {"success": False, "record": None, "error": str(e), "file": pdf_path}
 
 
 def main():
     parser = argparse.ArgumentParser(description="PCE v2.0 Batch Ingestion and Quality Certification")
     parser.add_argument("--gcs", action="store_true", help="Stream PDFs directly from Google Cloud Storage (GCS)")
     parser.add_argument("--all", action="store_true", help="Process ALL PDFs in data directory (full corpus)")
+    parser.add_argument("--pdf", type=str, default=None, help="Process a single PDF file directly")
+    parser.add_argument("--dir", type=str, default=None, help="Process all PDFs in a specified directory")
     parser.add_argument("--year", type=int, default=None, help="Target judgment year")
-    parser.add_argument("--samples-per-year", type=int, default=None, help="Number of judgments to process per year")
     parser.add_argument("--limit", type=int, default=None, help="Limit total number of PDFs processed")
     parser.add_argument("--workers", type=int, default=config.default_ingestion_workers, help=f"Number of parallel worker processes (default: {config.default_ingestion_workers})")
     parser.add_argument("--target", choices=["local", "alloydb"], default=os.getenv("DATABASE_TARGET", "local"), help="Target database: 'local' (SQLite) or 'alloydb' (Google Cloud AlloyDB PostgreSQL 17)")
-    parser.add_argument("--reset", action="store_true", help="Wipe database and output JSONs before ingestion")
+    parser.add_argument("--reset", action="store_true", help="Wipe database and output JSONs before ingestion (local dev only)")
     parser.add_argument("--yes", "-y", action="store_true", help="Acknowledge and confirm destructive operations without interactive prompt")
     args = parser.parse_args()
 
@@ -57,7 +57,6 @@ def main():
     print("=== PCE v2.0 BATCH INGESTION & DATA QUALITY CERTIFICATION ===")
     print("=" * 85)
 
-    db_path = config.output_dir / "scj_rag_v2.db"
     use_alloydb = (args.target == "alloydb" or os.getenv("DATABASE_TARGET", "").lower() in ("alloydb", "postgres", "postgresql"))
 
     if args.reset:
@@ -73,77 +72,70 @@ def main():
             except (EOFError, KeyboardInterrupt):
                 print("\nReset aborted.")
                 sys.exit(0)
-        print(">> Reset confirmed: Wiping previous database and JSON directories...")
-        for p in [db_path, db_path.with_name("scj_rag_v2.db-wal"), db_path.with_name("scj_rag_v2.db-shm")]:
-            if p.exists():
-                try:
-                    os.remove(p)
-                except OSError:
-                    pass
-        for folder in [config.chunks_dir, config.documents_dir, config.logss_dir]:
-            if folder.exists():
-                shutil.rmtree(folder, ignore_errors=True)
-            folder.mkdir(parents=True, exist_ok=True)
 
-    if use_alloydb:
-        target_db_url = os.getenv("ALLOYDB_DATABASE_URL", f"postgresql+psycopg2://postgres:root@2026@34.93.114.95:5432/scrag")
-        print(f">> Target Database: Google Cloud AlloyDB (PostgreSQL 17.10) -> 34.93.114.95:5432/scrag (BM25 + pgvector HNSW)")
-    else:
-        print(f">> Target Database: Local SQLite -> {db_path.resolve()}")
-        init_database(db_path)
-        target_db_url = f"sqlite:///{db_path.resolve().as_posix()}"
+        print(">> Performing clean reset of local output directory and database...")
+        db_path = config.output_dir / "scj_rag_v2.db"
+        if db_path.exists():
+            try:
+                os.remove(db_path)
+            except Exception as e:
+                print(f"Warning removing database file: {e}")
+
+        for sub in [config.chunks_dir, config.documents_dir, config.logss_dir]:
+            if sub.exists():
+                shutil.rmtree(sub, ignore_errors=True)
+            sub.mkdir(parents=True, exist_ok=True)
+        print(">> Clean reset complete.")
+
+    # Initialize Target Database Schema (Frozen production schema)
+    target_db_url = resolve_database_url(target=args.target)
+    print(f">> Initializing Database schema on target: '{args.target}'...")
+    if target_db_url.startswith("sqlite"):
+        sqlite_file = Path(target_db_url.replace("sqlite:///", ""))
+        init_database(sqlite_file)
+    print(">> Database schema initialized and verified.")
 
     pipeline = IngestionPipeline(db_url=target_db_url, enable_db=True)
 
+    # Collect Input Judgment PDFs
     target_files = []
-    if args.gcs:
-        target_year = args.year or 1950
-        print(f">> Loading files from GCS bucket: {config.gcs_bucket}/{config.gcs_prefix}/year={target_year}/english/")
-        gcs = GCSDataLoader()
-        all_blobs = gcs.list_available_pdfs(year=target_year)
+    if args.pdf:
+        p_path = Path(args.pdf)
+        if not p_path.exists():
+            print(f"[ERROR] Specified PDF does not exist: {args.pdf}")
+            sys.exit(1)
+        target_files.append((str(p_path), args.year or 2026))
+    elif args.dir:
+        d_path = Path(args.dir)
+        if not d_path.exists():
+            print(f"[ERROR] Specified directory does not exist: {args.dir}")
+            sys.exit(1)
+        for f in sorted(d_path.glob("**/*.pdf")):
+            if args.limit and len(target_files) >= args.limit:
+                break
+            target_files.append((str(f), args.year or 2026))
+    elif args.gcs:
+        print(">> Connecting to Google Cloud Storage (GCS)...")
+        gcs_loader = GCSDataLoader()
+        if not gcs_loader.is_available():
+            raise RuntimeError(f"Cannot stream from GCS: Client or bucket '{gcs_loader.bucket_name}' is unavailable.")
+
+        uris = gcs_loader.list_available_pdfs(year=args.year)
         if args.limit:
-            all_blobs = all_blobs[:args.limit]
-        print(f">> Found {len(all_blobs)} PDFs in GCS.")
-        target_files = [(b, target_year) for b in all_blobs]
-    elif args.all:
-        data_root = config.data_dir
-        print(f">> Scanning local data directory across all years: {data_root.resolve()}")
-        for yr_dir in sorted(data_root.glob("year=*")):
-            try:
-                yr = int(yr_dir.name.split("=")[1])
-            except ValueError:
-                yr = 2026
-            pdf_files = list(yr_dir.glob("**/*.pdf"))
-            if args.samples_per_year:
-                pdf_files = pdf_files[:args.samples_per_year]
-            for f in pdf_files:
-                target_files.append((str(f), yr))
-            print(f"   -> Year {yr}: queued {len(pdf_files)} PDFs")
-        if args.limit:
-            target_files = target_files[:args.limit]
+            uris = uris[:args.limit]
+        for uri in uris:
+            target_files.append((uri, args.year))
     else:
-        sample_1950 = config.fixtures_dir / "1950_1_15_25_EN.pdf"
-        sample_2026 = config.fixtures_dir / "2026_1_183_190_EN.pdf"
-        sample_p25 = config.fixtures_dir / "1950_1_25_29_EN.pdf"
-
-        if sample_1950.exists():
-            target_files.append((str(sample_1950), 1950))
-        if sample_2026.exists():
-            target_files.append((str(sample_2026), 2026))
-        if sample_p25.exists():
-            target_files.append((str(sample_p25), 1950))
-
-        if not target_files:
-            # Fallback to data directory sample
-            data_pdf = list(config.data_dir.glob("**/*.pdf"))
-            for f in data_pdf[:args.limit or 10]:
-                target_files.append((str(f), 2026))
+        # Default local scan from data directory
+        data_pdfs = list(config.data_dir.glob("**/*.pdf")) if config.data_dir.exists() else []
+        for f in data_pdfs[:args.limit or len(data_pdfs)]:
+            target_files.append((str(f), args.year or 2026))
 
     total_count = len(target_files)
     print(f"\n>> Queued {total_count} judgment PDFs for parallel batch ingestion (Workers: {args.workers})...\n")
 
     if total_count == 0:
-        print(">> No PDFs found to process.")
+        print(">> No PDFs found to process. Specify --pdf <path>, --dir <path>, --gcs, or place PDFs in data/ directory.")
         return
 
     t0 = time.time()
@@ -155,10 +147,17 @@ def main():
     if args.workers <= 1 or total_count <= 2:
         for idx, (fpath, yr) in enumerate(target_files, 1):
             name = Path(fpath).name
-            rec = pipeline.process_pdf(fpath, year=yr, save_db=True)
-            if rec:
-                total_saved += 1
-                total_chunks += len(rec.chunks)
+            try:
+                rec = pipeline.process_pdf(fpath, year=yr, save_db=True)
+                if rec:
+                    total_saved += 1
+                    total_chunks += len(rec.chunks)
+                else:
+                    failed_files.append(name)
+            except Exception as e:
+                print(f"[ERROR] Ingestion failed for {name}: {e}")
+                failed_files.append(name)
+
             if idx % log_interval == 0 or idx == total_count:
                 elapsed = time.time() - t0
                 rate = total_saved / max(0.001, elapsed)
@@ -167,14 +166,19 @@ def main():
                 print(f"[{idx:>5}/{total_count}] ({pct:>5.1f}%) Ingested {name:<30} | Chunks: {total_chunks:>6,} | Rate: {rate:>4.1f} pdf/s | ETA: {rem_sec/60:.1f}m")
     else:
         with ProcessPoolExecutor(max_workers=args.workers) as executor:
-            for idx, rec in enumerate(executor.map(worker_process_pdf, target_files, chunksize=4), 1):
-                if rec:
+            for idx, res in enumerate(executor.map(worker_process_pdf, target_files, chunksize=4), 1):
+                if res and res.get("success") and res.get("record"):
+                    rec = res["record"]
                     pipeline.loader.save_document_record(rec)
                     total_saved += 1
                     total_chunks += len(rec.chunks)
                     name = Path(rec.file_path).name
                 else:
-                    name = "error_skip"
+                    file_name = Path(res.get("file", "unknown")).name if res else "unknown_file"
+                    err_msg = res.get("error") if res else "Worker failure"
+                    print(f"[WORKER ERROR] Failed on {file_name}: {err_msg}")
+                    failed_files.append(file_name)
+                    name = f"FAILED: {file_name}"
 
                 if idx % log_interval == 0 or idx == total_count:
                     elapsed = time.time() - t0
@@ -187,29 +191,31 @@ def main():
     print(f"\n>> Ingestion finished in {elapsed:.2f}s ({elapsed/60:.2f}m)!")
     print(f">> Total judgments saved: {total_saved:,} / {total_count:,} | Total active chunks: {total_chunks:,}")
 
-    # Run Data Quality and Integrity Verification
+    # Run Data Quality and Integrity Verification (OFF-002, OFF-010)
     print("\n" + "=" * 85)
     print("=== RUNNING DATA QUALITY & INTEGRITY VERIFICATION ===")
     print("=" * 85)
-    gate_results = check_all_gates(chunks_dir=config.chunks_dir, db_url=target_db_url)
-    checks = gate_results.get("quality_checks", gate_results.get("strict_gates", {}))
+    gate_results = run_quality_audit(chunks_dir=config.chunks_dir, db_url=target_db_url)
+    checks = gate_results.get("quality_checks", {})
     for check_name, info in checks.items():
         print(f"{check_name:<28} | {info['status']:<10} | {info['detail']}")
     print("-" * 85)
 
-    # OFF-05: Enforce batch failure contract
+    # OFF-005 & OFF-010: Strict failure exit contract
     has_failed_docs = len(failed_files) > 0
+    all_passed = bool(gate_results.get("all_passed", False))
+
     if has_failed_docs:
         print(f"\n[CRITICAL ERROR] Batch ingestion failed on {len(failed_files)} documents:")
         for fn in failed_files:
             print(f"  - {fn}")
 
-    if gate_results.get("all_passed", gate_results.get("all_strict_passed")) and not has_failed_docs:
+    if all_passed and not has_failed_docs:
         print(">>> [SUCCESS] ALL DATA QUALITY AND INTEGRITY CHECKS VERIFIED (100% PASS). CERTIFIED FOR PRODUCTION.")
+        sys.exit(0)
     else:
-        print("[WARNING] Data quality verification checks incomplete or document failures occurred.")
-        if has_failed_docs:
-            sys.exit(1)
+        print("\n[CRITICAL ERROR] Production certification failed: quality gates failed or document failures occurred.")
+        sys.exit(1)
     print("=" * 85)
 
 

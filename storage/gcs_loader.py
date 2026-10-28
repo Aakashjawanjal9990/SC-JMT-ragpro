@@ -48,6 +48,17 @@ class GCSDataLoader:
         logger.info(f"Discovered {len(pdf_paths)} PDFs in GCS for year {year} under prefix: {prefix}")
         return pdf_paths
 
+    def list_available_pdfs(self, year: Optional[int] = None, prefix_base: str = "raw_pdfs/pdfs") -> List[str]:
+        """Lists available PDF URIs in GCS. Compatible with batch runner expectations."""
+        if not self.is_available():
+            raise RuntimeError(f"GCS connection unavailable. Cannot list blobs for bucket '{self.bucket_name}'.")
+        if year is not None:
+            return self.list_year_pdfs(year=year, prefix_base=prefix_base)
+        blobs = self.client.list_blobs(self.bucket_name, prefix=prefix_base)
+        pdf_paths = [f"gs://{self.bucket_name}/{b.name}" for b in blobs if b.name.endswith(".pdf")]
+        logger.info(f"Discovered {len(pdf_paths)} PDFs in GCS under prefix: {prefix_base}")
+        return pdf_paths
+
     def download_to_temp(self, gcs_uri: str) -> Tuple[str, int]:
         """
         Downloads a GCS PDF to a local temporary file for PyMuPDF processing.
@@ -85,4 +96,3 @@ class GCSDataLoader:
             raise
         logger.info(f"Downloaded GCS blob {gcs_uri} -> {tmp_path}")
         return tmp_path, year
-

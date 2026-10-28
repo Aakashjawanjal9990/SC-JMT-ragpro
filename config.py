@@ -7,6 +7,8 @@ All pipeline, retrieval, storage, and verification parameters are loaded dynamic
 import os
 from pathlib import Path
 from dataclasses import dataclass
+from typing import Optional
+from urllib.parse import quote_plus
 
 # Load environment variables from .env file if available
 try:
@@ -23,26 +25,28 @@ except ImportError:
     PCEV2_ROOT = Path(__file__).resolve().parent
 
 
-from urllib.parse import quote_plus
-
-def resolve_database_url(pcev2_root: Path) -> str:
+def resolve_database_url(pcev2_root: Optional[Path] = None, target: Optional[str] = None) -> str:
     """
     Resolves database URL from DATABASE_TARGET, DATABASE_URL, or individual DB_* credentials.
     Uses URL-encoding (quote_plus) to safely handle reserved characters (e.g., '@' in passwords).
     Enforces configurable TLS sslmode policy for remote PostgreSQL / AlloyDB connections.
+    Defaults safely to local SQLite in output/scj_rag_v2.db when no cloud credentials provided.
     """
-    target = os.getenv("DATABASE_TARGET", "").lower()
+    root = pcev2_root or PCEV2_ROOT
+    active_target = (target or os.getenv("DATABASE_TARGET", "")).lower()
     sslmode = os.getenv("DB_SSLMODE", "prefer")
-    
-    if target in ("alloydb", "postgres", "postgresql", "prod", "production"):
+
+    if active_target in ("alloydb", "postgres", "postgresql", "prod", "production"):
         alloy_url = os.getenv("ALLOYDB_DATABASE_URL")
         if alloy_url:
             return alloy_url
-        db_user = os.getenv("DB_USER", "postgres")
-        db_pass = os.getenv("DB_PASSWORD", "root@2026")
-        db_host = os.getenv("DB_HOST", "34.93.114.95")
+        db_user = os.getenv("DB_USER")
+        db_pass = os.getenv("DB_PASSWORD")
+        db_host = os.getenv("DB_HOST")
         db_port = os.getenv("DB_PORT", "5432")
-        db_name = os.getenv("DB_NAME", "scrag")
+        db_name = os.getenv("DB_NAME")
+        if not (db_user and db_pass and db_host and db_name):
+            raise ValueError("Target 'alloydb' requested but DB_USER, DB_PASSWORD, DB_HOST, or DB_NAME is missing in environment.")
         enc_pass = quote_plus(db_pass)
         return f"postgresql+psycopg2://{db_user}:{enc_pass}@{db_host}:{db_port}/{db_name}?sslmode={sslmode}"
 
@@ -53,32 +57,32 @@ def resolve_database_url(pcev2_root: Path) -> str:
     # Check if individual AlloyDB / PostgreSQL credentials are provided
     db_user = os.getenv("DB_USER")
     db_pass = os.getenv("DB_PASSWORD")
-    db_host = os.getenv("DB_HOST", "34.93.114.95")
+    db_host = os.getenv("DB_HOST")
     db_port = os.getenv("DB_PORT", "5432")
     db_name = os.getenv("DB_NAME")
 
-    if db_user and db_pass and db_name:
+    if db_user and db_pass and db_host and db_name:
         enc_pass = quote_plus(db_pass)
         return f"postgresql+psycopg2://{db_user}:{enc_pass}@{db_host}:{db_port}/{db_name}?sslmode={sslmode}"
 
     # Default to local SQLite database in output directory
-    return f"sqlite:///{(pcev2_root / 'output' / 'scj_rag_v2.db').as_posix()}"
+    return f"sqlite:///{(root / 'output' / 'scj_rag_v2.db').as_posix()}"
 
 
 @dataclass
 class PipelineConfig:
     # Storage & DB
-    DATABASE_URL: str = resolve_database_url(PCEV2_ROOT)
+    DATABASE_URL: str = resolve_database_url()
     database_url: str = DATABASE_URL
     vector_mode: str = os.getenv("VECTOR_MODE", "external")
     allow_mock_embeddings: bool = os.getenv("ALLOW_MOCK_EMBEDDINGS", "false").lower() in ("true", "1", "yes")
-    
-    # Google Cloud Platform (GCP) & Cloud Storage (GCS) - OFF-01: Safe default for offline dev
+
+    # Google Cloud Platform (GCP) & Cloud Storage (GCS)
     gcp_project: str = os.getenv("GCP_PROJECT", "sc-judgments-dev")
     gcp_location: str = os.getenv("GCP_LOCATION", "us-central1")
     gcs_bucket: str = os.getenv("GCS_BUCKET", "sc-judgments-dev-data")
     gcs_prefix: str = os.getenv("GCS_PREFIX", "raw_pdfs/pdfs")
-    
+
     # Vertex AI Embedding Engine
     embedding_model_id: str = os.getenv("EMBEDDING_MODEL_ID", "text-embedding-004")
     embedding_dimension: int = int(os.getenv("EMBEDDING_DIMENSION", "768"))
@@ -98,8 +102,7 @@ class PipelineConfig:
     REPORTS_DIR: Path = OUTPUT_DIR / "reports"
     reports_dir: Path = REPORTS_DIR
     logss_dir: Path = OUTPUT_DIR / "logss"
-    fixtures_dir: Path = Path("tests/fixtures")
-    data_dir: Path = PCEV2_ROOT / "data" / "sample_pdfs"
+    data_dir: Path = PCEV2_ROOT / "data"
 
     # Pipeline Constants & Quality Thresholds
     MIN_TEXT_LENGTH_THRESHOLD: int = int(os.getenv("MIN_TEXT_THRESHOLD", "50"))
@@ -141,7 +144,6 @@ class PipelineConfig:
         self.chunks_dir.mkdir(parents=True, exist_ok=True)
         self.documents_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
-        (self.base_dir / "o_p").mkdir(parents=True, exist_ok=True)
 
 
 config = PipelineConfig()

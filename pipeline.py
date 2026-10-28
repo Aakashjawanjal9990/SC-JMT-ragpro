@@ -7,43 +7,35 @@ import os
 import sys
 import json
 import time
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 import fitz  # PyMuPDF
 
-# Add parent dir to sys.path so PCEV2 can be run standalone or imported
+logger = logging.getLogger(__name__)
+
+# Add repo root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
-try:
-    from PCEV2.config import config
-    from PCEV2.core.models import DocumentRecord
-    from PCEV2.parsing.zone_extractor import CoordinateZoneExtractor
-    from PCEV2.parsing.case_boundaries import CaseBoundaryDetector
-    from PCEV2.parsing.metadata_extractor import LegalMetadataExtractor
-    from PCEV2.parsing.structure_tracker import LawReportStructureTracker
-    from PCEV2.chunking.page_chunker import PageChunker
-    from PCEV2.embedding.vertex_embedder import VertexEmbedder
-    from PCEV2.storage.db_loader import DatabaseLoader
-    from PCEV2.storage.stage_tracker import DocumentStageTracker, export_verification_csv
-    from PCEV2.storage.gcs_loader import GCSDataLoader
-except ImportError:
-    from config import config
-    from core.models import DocumentRecord
-    from parsing.zone_extractor import CoordinateZoneExtractor
-    from parsing.case_boundaries import CaseBoundaryDetector
-    from parsing.metadata_extractor import LegalMetadataExtractor
-    from parsing.structure_tracker import LawReportStructureTracker
-    from chunking.page_chunker import PageChunker
-    from embedding.vertex_embedder import VertexEmbedder
-    from storage.db_loader import DatabaseLoader
-    from storage.stage_tracker import DocumentStageTracker, export_verification_csv
-    from storage.gcs_loader import GCSDataLoader
+from config import config
+from core.models import DocumentRecord
+from parsing.zone_extractor import CoordinateZoneExtractor
+from parsing.case_boundaries import CaseBoundaryDetector
+from parsing.metadata_extractor import LegalMetadataExtractor
+from parsing.structure_tracker import LawReportStructureTracker
+from chunking.page_chunker import PageChunker
+from embedding.vertex_embedder import VertexEmbedder
+from storage.db_loader import DatabaseLoader
+from storage.stage_tracker import DocumentStageTracker, export_verification_csv
+from storage.gcs_loader import GCSDataLoader
+from local_ocr.router import LocalOCRRouter, PageRoutingDecision
+from local_ocr.engine import LocalOCREngine
 
 
 class IngestionPipeline:
-    """Orchestrates layout-aware parsing, chunking, embedding, and storage."""
+    """Orchestrates layout-aware parsing, conditional OCR, chunking, embedding, and storage."""
 
     def __init__(self, db_url: Optional[str] = None, enable_db: bool = True):
         self.loader = DatabaseLoader(db_url=db_url) if enable_db else None
@@ -53,52 +45,71 @@ class IngestionPipeline:
             max_chunk_chars=config.max_chunk_chars,
             min_chunk_chars=config.min_chunk_chars
         )
+        self._router = None
+        self._engine = None
 
-    def process_pdf(self, pdf_path: str, year: Optional[int] = None, save_db: bool = True) -> DocumentRecord:
-        """Processes a single PDF document through all 4 stages idempotently. Supports local paths and gs:// URIs."""
+    @property
+    def router(self) -> LocalOCRRouter:
+        if self._router is None:
+            self._router = LocalOCRRouter()
+        return self._router
+
+    @property
+    def engine(self) -> LocalOCREngine:
+        if self._engine is None:
+            self._engine = LocalOCREngine()
+        return self._engine
+
+    def process_pdf(
+        self,
+        pdf_path: str,
+        year: Optional[int] = None,
+        save_db: bool = True
+    ) -> Optional[DocumentRecord]:
+        """
+        Processes a single judgment PDF end-to-end through PCE v2.0:
+        1. Parsing & Coordinate Zoning (PyMuPDF)
+        2. 8-Rule Conditional OCR Routing & Local PaddleOCR layout extraction
+        3. Rule R2 Single-Page Paragraph-Preserving Chunking (page_start == page_end)
+        4. Contextual 768-dim Vector Embedding (Vertex AI text-embedding-004)
+        5. Persistence to AlloyDB (PostgreSQL 17.10) / SQLite and structured JSON deliverables.
+        """
         temp_file_to_clean = None
-        is_gcs = str(pdf_path).startswith("gs://")
-        
-        if is_gcs:
-            gcs_loader = GCSDataLoader()
-            local_pdf_path, detected_year = gcs_loader.download_to_temp(str(pdf_path))
-            temp_file_to_clean = local_pdf_path
-            path = Path(local_pdf_path)
-            year = year or detected_year
-            doc_id = Path(pdf_path).stem
-        else:
-            path = Path(pdf_path)
-            doc_id = path.stem
-            year = year or 2026
-
-        t0 = time.time()
-        # OFF-07: Wrap fitz.open in try/finally to prevent temp file leak
         doc = None
+
+        if pdf_path.startswith("gs://"):
+            gcs_loader = GCSDataLoader()
+            local_tmp, detected_year = gcs_loader.download_to_temp(pdf_path)
+            temp_file_to_clean = local_tmp
+            active_path = local_tmp
+            if year is None:
+                year = detected_year
+        else:
+            active_path = pdf_path
+
+        p_obj = Path(active_path)
+        doc_id = p_obj.stem
+        if year is None:
+            parts = doc_id.split("_")
+            year = int(parts[0]) if parts and parts[0].isdigit() else 2026
+
+        tracker = DocumentStageTracker(document_id=doc_id, year=year)
+
         try:
-            doc = fitz.open(path)
+            tracker.start_stage("provenance")
+            doc = fitz.open(active_path)
             total_pages = len(doc)
             if total_pages == 0:
-                raise ValueError(f"Empty PDF document: {pdf_path}")
+                logger.warning(f"Empty document: {active_path}")
+                return None
 
-            # Extract opening metadata across first two pages (front-matter spans pages 1 & 2 in SCR)
-            p0_text = doc[0].get_text()
-            p0_clean, is_sh_p0 = CaseBoundaryDetector.split_shared_page(p0_text, is_end_of_doc=False)
-            combined_meta_text = p0_clean
-            if len(doc) > 1:
-                combined_meta_text += "\n" + doc[1].get_text()
-            doc_meta = LegalMetadataExtractor.extract_metadata(combined_meta_text)
-            case_title = f"{doc_meta.appellant or 'Appellant'} v. {doc_meta.respondent or 'Respondent'}"
-
-            # Initialize 4-Stage Lifecycle Tracker
-            tracker = DocumentStageTracker(
-                document_id=doc_id,
-                file_path=str(pdf_path),
-                year=year,
-                case_title=case_title
-            )
+            # Extract Global Document Metadata
+            doc_meta = LegalMetadataExtractor.extract_metadata_from_pdf(active_path, doc_id=doc_id)
+            case_title = doc_meta.case_title or "Supreme Court Judgment"
+            tracker.complete_stage("provenance")
 
             # -------------------------------------------------------------
-            # STAGE 1: Parsing & Coordinate Zone Extraction
+            # STAGE 1: Parsing, Coordinate Zoning & Conditional OCR
             # -------------------------------------------------------------
             tracker.start_stage("parsing")
             structure_tracker = LawReportStructureTracker(bench_judges=doc_meta.judges or [])
@@ -131,19 +142,62 @@ class IngestionPipeline:
                         shared_with_map[pno] = sh_doc
 
                 pz.cleaned_text = cl_text
-                # If text became empty, re-check image-only vs verified-blank vs raw text rescue
-                if not cl_text.strip():
+
+                # Evaluate page routing via 8-Rule Conditional OCR Router
+                routing_res = self.router.evaluate_page(
+                    page=page_obj,
+                    page_number=pno,
+                    total_pages=total_pages,
+                    document_id=doc_id
+                )
+
+                if routing_res.decision in (PageRoutingDecision.USE_PADDLE_OCR, PageRoutingDecision.USE_PP_STRUCTURE, PageRoutingDecision.FLAG_FOR_REVIEW):
+                    try:
+                        ocr_res = self.engine.ocr_page(page_obj, page_number=pno, allow_mock=config.allow_mock_embeddings)
+                        if ocr_res and ocr_res.text.strip():
+                            pz.cleaned_text = ocr_res.text.strip()
+                            pz.extraction_method = "paddle_ocr"
+                            pz.ocr_quality = max(0.70, getattr(ocr_res, "average_confidence", 0.85))
+                        elif ocr_res and ocr_res.error:
+                            logger.warning(f"OCR execution warning on {doc_id} p.{pno}: {ocr_res.error}")
+                            pz.extraction_method = "ocr_failed"
+                            pz.ocr_quality = 0.0
+                    except Exception as e:
+                        logger.error(f"OCR invocation failure on {doc_id} p.{pno}: {e}")
+                        pz.extraction_method = "ocr_failed"
+                        pz.ocr_quality = 0.0
+                elif routing_res.decision == PageRoutingDecision.SKIP_BLANK:
+                    pz.extraction_method = "verified_blank"
+                    pz.ocr_quality = 1.0
+                    pz.cleaned_text = ""
+                elif routing_res.decision == PageRoutingDecision.SKIP_NATIVE_OK:
+                    if not pz.cleaned_text.strip() and routing_res.reasons and "rescued_raw_text" in routing_res.reasons[0]:
+                        pz.cleaned_text = (page_obj.get_text("text") or "").strip()
+                        pz.extraction_method = "pymupdf_fallback"
+
+                # Final fallback guard if text is still empty
+                if not pz.cleaned_text.strip():
                     images = page_obj.get_images() if hasattr(page_obj, "get_images") else []
                     raw_chars = len((page_obj.get_text("text") or "").strip())
-                    if images:
-                        pz.extraction_method = "image_only_pending_ocr"
-                        pz.ocr_quality = 0.0
-                    elif raw_chars > 0:
-                        # Raw text exists! Do not classify as verified_blank
+                    if images and pz.extraction_method not in ("ocr_failed", "paddle_ocr"):
+                        try:
+                            ocr_res = self.engine.ocr_page(page_obj, page_number=pno, allow_mock=config.allow_mock_embeddings)
+                            if ocr_res and ocr_res.text.strip():
+                                pz.cleaned_text = ocr_res.text.strip()
+                                pz.extraction_method = "paddle_ocr"
+                                pz.ocr_quality = max(0.70, getattr(ocr_res, "average_confidence", 0.85))
+                            else:
+                                pz.extraction_method = "ocr_failed"
+                                pz.ocr_quality = 0.0
+                        except Exception as ocr_err:
+                            logger.warning(f"Fallback OCR rescue failed on {doc_id} p.{pno}: {ocr_err}")
+                            pz.extraction_method = "ocr_failed"
+                            pz.ocr_quality = 0.0
+                    elif raw_chars > 0 and pz.extraction_method != "ocr_failed":
                         pz.cleaned_text = (page_obj.get_text("text") or "").strip()
                         pz.extraction_method = "pymupdf_fallback"
                         pz.ocr_quality = CoordinateZoneExtractor.calculate_ocr_quality(pz.cleaned_text, pz.is_born_digital)
-                    else:
+                    elif pz.extraction_method != "ocr_failed":
                         pz.extraction_method = "verified_blank"
                         pz.ocr_quality = 1.0
 
