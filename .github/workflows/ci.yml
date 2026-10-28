@@ -47,7 +47,13 @@ jobs:
       - name: Verify Pytest Installation
         run: python -m pytest --version
 
-      - name: Run Automated Tests
+      - name: Run Automated Tests with Coverage
         env:
           CI: "true"
-        run: python -m pytest tests/ -v --tb=short
+        run: |
+          python -m pytest tests/ \
+            --cov=app \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            -v \
+            --tb=short
