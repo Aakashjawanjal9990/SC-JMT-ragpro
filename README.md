@@ -43,4 +43,3 @@ that communicates with a FastAPI backend.
 - npm run lint - Run ESLint
 - npm run format - Format files with Prettier
 - npm run format:check - Check formatting
-
