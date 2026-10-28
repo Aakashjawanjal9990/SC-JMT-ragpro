@@ -1,21 +1,16 @@
-"""Chunk types, the canonical chunk-record contract, and citation formatting.
+"""Chunk types and the canonical chunk-record contract.
 
-Every vector store adapter returns chunk metadata with these keys, mapped from the
-database's own columns:
+Chunk metadata uses these keys, mapped from the vector database's chunks table:
 
-    document_id         judgment UUID the chunk belongs to
-    source_pdf_id       source-file UUID the chunk was extracted from
+    document_id         judgment UUID the chunk belongs to (chunks.judgment_uuid)
+    source_pdf_id       source-file UUID the chunk was extracted from (chunks.source_file_uuid)
     page_start/page_end inclusive, one-based physical PDF pages (chunks.page_start/end)
-    is_active           chunk is active
-    source_is_current   the source file is the judgment's current version
-    source_document_id  judgment UUID recorded on the source-file row
-    decision_date       ISO date of the judgment, for date-range filters
-    case_name           display label for prompt citations only (not filterable)
+    is_active           chunk is active (chunks.is_active)
 
 The chunk's own id is the chunk UUID and its text is chunks.content, unmodified.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,10 +19,6 @@ SOURCE_PDF_ID = "source_pdf_id"
 PAGE_START = "page_start"
 PAGE_END = "page_end"
 IS_ACTIVE = "is_active"
-SOURCE_IS_CURRENT = "source_is_current"
-SOURCE_DOCUMENT_ID = "source_document_id"
-CASE_NAME = "case_name"
-DECISION_DATE = "decision_date"
 
 MAX_PAGES = 100  # backend RetrievedPassage.original_page_numbers max_length
 
@@ -41,7 +32,8 @@ class Chunk:
 
 @dataclass(frozen=True)
 class RetrievedChunk:
-    """A chunk with its final score; per-stage scores are kept for debugging."""
+    """A chunk with its final score (rerank score, or fusion score without a reranker);
+    per-stage scores are kept for debugging."""
 
     id: str
     text: str
@@ -49,6 +41,7 @@ class RetrievedChunk:
     score: float
     dense_score: float | None = None
     bm25_score: float | None = None
+    fusion_score: float | None = None
     rerank_score: float | None = None
 
     @property
@@ -58,10 +51,6 @@ class RetrievedChunk:
     @property
     def pages(self) -> list[int]:
         return page_range(self.metadata) or []
-
-    @property
-    def citation(self) -> str:
-        return format_citation(self.metadata)
 
 
 def page_range(metadata: Mapping[str, Any]) -> list[int] | None:
@@ -82,27 +71,5 @@ def page_range(metadata: Mapping[str, Any]) -> list[int] | None:
 
 
 def is_citable(metadata: Mapping[str, Any]) -> bool:
-    """Active chunk of the current source version, whose source file belongs to the
-    same judgment. Missing flags count as not citable."""
-    return (
-        metadata.get(IS_ACTIVE) is True
-        and metadata.get(SOURCE_IS_CURRENT) is True
-        and metadata.get(DOCUMENT_ID) is not None
-        and metadata.get(SOURCE_DOCUMENT_ID) == metadata.get(DOCUMENT_ID)
-    )
-
-
-def format_pages(pages: Sequence[int]) -> str:
-    if not pages:
-        return "p.?"
-    pages = sorted(set(pages))
-    if len(pages) == 1:
-        return f"p.{pages[0]}"
-    if pages == list(range(pages[0], pages[-1] + 1)):
-        return f"pp.{pages[0]}-{pages[-1]}"
-    return "pp." + ", ".join(str(page) for page in pages)
-
-
-def format_citation(metadata: Mapping[str, Any]) -> str:
-    label = metadata.get(CASE_NAME) or metadata.get(DOCUMENT_ID) or "unknown"
-    return f"({label}, {format_pages(page_range(metadata) or [])})"
+    """Active chunk that belongs to a judgment. Missing flags count as not citable."""
+    return metadata.get(IS_ACTIVE) is True and metadata.get(DOCUMENT_ID) is not None

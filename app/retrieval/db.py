@@ -1,11 +1,10 @@
-"""Postgres connections for the source database (Cloud SQL) and the BM25 database
-(AlloyDB), via the Google connectors or a direct host/unix socket (Auth Proxy, local).
+"""Postgres connections for the vector database (pgvector) and the BM25 database
+(AlloyDB), via the Cloud SQL / AlloyDB connectors or a direct host/unix socket.
 
 Passwords are never logged or included in reprs.
 """
 
 import logging
-import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -22,51 +21,30 @@ _QUERY_CANCELED = "57014"  # Postgres SQLSTATE for statement_timeout
 
 @dataclass(frozen=True)
 class DatabaseConfig:
-    name: str | None = None
-    user: str | None = None
+    name: str
+    user: str
     password: str | None = field(default=None, repr=False)
     # Exactly one way to reach the server:
     instance_connection_name: str | None = None  # Cloud SQL "project:region:instance"
     instance_uri: str | None = None  # AlloyDB "projects/P/locations/R/clusters/C/instances/I"
     host: str | None = None  # TCP host (e.g. Auth Proxy on 127.0.0.1) or a unix socket dir
     port: int = 5432
-    ip_type: str = "public"  # connector IP type: public | private | psc
+    ip_type: str = "private"  # connector IP type: public | private | psc
     iam_auth: bool = False
     pool_size: int = 5
     statement_timeout_ms: int = 5000
 
-    @property
-    def configured(self) -> bool:
-        return bool(self.name and (self.instance_connection_name or self.instance_uri or self.host))
-
-    @classmethod
-    def from_environment(cls, prefix: str = "") -> "DatabaseConfig":
-        """Read {prefix}DB_NAME, {prefix}DB_USER, {prefix}DB_PASSWORD,
-        {prefix}INSTANCE_CONNECTION_NAME, {prefix}INSTANCE_URI, {prefix}DB_HOST,
-        {prefix}DB_PORT, {prefix}DB_IP_TYPE, {prefix}DB_IAM_AUTH, {prefix}DB_POOL_SIZE,
-        {prefix}DB_STATEMENT_TIMEOUT_MS."""
-
-        def get(name: str) -> str | None:
-            value = os.getenv(prefix + name)
-            return value.strip() if value and value.strip() else None
-
-        defaults = cls()
-        return cls(
-            name=get("DB_NAME"),
-            user=get("DB_USER"),
-            # Not stripped: whitespace can be part of a password.
-            password=os.getenv(prefix + "DB_PASSWORD") or None,
-            instance_connection_name=get("INSTANCE_CONNECTION_NAME"),
-            instance_uri=get("INSTANCE_URI"),
-            host=get("DB_HOST"),
-            port=int(get("DB_PORT") or defaults.port),
-            ip_type=(get("DB_IP_TYPE") or defaults.ip_type).lower(),
-            iam_auth=(get("DB_IAM_AUTH") or "").lower() in {"1", "true", "yes", "on"},
-            pool_size=int(get("DB_POOL_SIZE") or defaults.pool_size),
-            statement_timeout_ms=int(
-                get("DB_STATEMENT_TIMEOUT_MS") or defaults.statement_timeout_ms
-            ),
-        )
+    def __post_init__(self) -> None:
+        targets = [self.instance_connection_name, self.instance_uri, self.host]
+        if sum(bool(t) for t in targets) != 1:
+            raise ValueError(
+                f"Database {self.name!r}: set exactly one of instance_connection_name, "
+                "instance_uri or host"
+            )
+        if self.ip_type.lower() not in {"public", "private", "psc"}:
+            raise ValueError(f"Database {self.name!r}: ip_type must be public, private or psc")
+        if not self.iam_auth and not self.password:
+            raise ValueError(f"Database {self.name!r}: set password or iam_auth: true")
 
 
 def _is_timeout(exc: BaseException) -> bool:
@@ -81,8 +59,6 @@ class Database:
     """Pooled SQLAlchemy engine plus the connector that backs it, if any."""
 
     def __init__(self, config: DatabaseConfig, label: str = "database") -> None:
-        if not config.configured:
-            raise ValueError(f"The {label} connection is not configured")
         self.config = config
         self.label = label
         self._connector = None

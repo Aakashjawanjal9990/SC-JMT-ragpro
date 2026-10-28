@@ -1,4 +1,0 @@
-# Only for the matching optional setting:
-google-cloud-discoveryengine>=0.13          # RETRIEVAL_RERANKER=vertex
-sentence-transformers>=3.0                  # RETRIEVAL_EMBEDDING_PROVIDER=local or RETRIEVAL_RERANKER=cross-encoder
-google-cloud-alloydb-connector[pg8000]>=1.9 # RETRIEVAL_BM25_BACKEND=postgres (AlloyDB)

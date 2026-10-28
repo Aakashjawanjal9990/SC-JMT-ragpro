@@ -1,7 +1,13 @@
-# Required by the retrieval module (Cloud SQL + pgvector, Vertex AI query embedding,
-# in-memory BM25). No torch / sentence-transformers.
+# Required by the retrieval module: pgvector (Cloud SQL connector), AlloyDB BM25
+# (AlloyDB connector), Vertex AI query embedding, Vertex AI Ranking API, config.yaml,
+# BM25 stemming, Groq (pseudo query passages and answer generation).
 numpy>=2.0
 sqlalchemy>=2.0,<3
 pg8000>=1.31
 cloud-sql-python-connector[pg8000]>=1.18
+google-cloud-alloydb-connector[pg8000]>=1.9
 google-genai>=1.0
+google-cloud-discoveryengine>=0.13
+pyyaml>=6.0
+snowballstemmer>=2.2
+groq>=0.11

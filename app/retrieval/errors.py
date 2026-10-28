@@ -1,12 +1,16 @@
-"""Retrieval failure types, kept distinct so the query backend can map them onto the
+"""Retrieval and answer-generation failure types, kept distinct so the query backend can map them onto the
 shared error envelope ({code, message, retryable}). An empty result is not an error:
 retrieval returns an empty sequence.
 
 Suggested mapping in the backend's /v1/query handler:
 
-    FilterError              422  VALIDATION_ERROR      retryable=False
+    UnsupportedFilterError   422  VALIDATION_ERROR      retryable=False  (any filter set)
     RetrievalTimeoutError    503  SERVICE_UNAVAILABLE   retryable=True
     RetrievalFailure         503  SERVICE_UNAVAILABLE   retryable=True
+    GenerationTimeoutError   503  SERVICE_UNAVAILABLE   retryable=True
+    GenerationFailure        503  SERVICE_UNAVAILABLE   retryable=True
+
+Generation errors subclass RetrievalError, so one handler covers both.
 """
 
 
@@ -31,13 +35,10 @@ class FilterError(RetrievalError):
 
 
 class UnsupportedFilterError(FilterError):
-    def __init__(self, field: str) -> None:
-        super().__init__(field, "This filter is not supported.")
+    """Retrieval always searches the whole corpus; it takes no filters."""
 
-
-class InvalidFilterValueError(FilterError):
     def __init__(self, field: str) -> None:
-        super().__init__(field, "This filter has an invalid value.")
+        super().__init__(field, "Filters are not supported.")
 
 
 class RetrievalTimeoutError(RetrievalError):
@@ -52,5 +53,21 @@ class RetrievalFailure(RetrievalError):
     """Retrieval could not complete: a dependency failed or returned inconsistent data."""
 
     code = "RETRIEVAL_FAILED"
+    status_code = 503
+    retryable = True
+
+
+class GenerationTimeoutError(RetrievalError):
+    """The answer model did not reply within its deadline."""
+
+    code = "GENERATION_TIMEOUT"
+    status_code = 503
+    retryable = True
+
+
+class GenerationFailure(RetrievalError):
+    """The answer model failed or returned nothing."""
+
+    code = "GENERATION_FAILED"
     status_code = 503
     retryable = True

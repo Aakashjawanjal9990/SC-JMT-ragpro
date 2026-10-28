@@ -2,3 +2,4 @@
 !bm25_builder/requirements.txt
 !bm25_builder/main.py
 !app/retrieval/tokenizer.py
+!config.yaml

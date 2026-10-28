@@ -1,0 +1,111 @@
+# Retrieval configuration, read by the backend's retrieval module (app/retrieval/config.py)
+# and by the BM25 build job (bm25_builder/main.py).
+#
+# Path: $RETRIEVAL_CONFIG if set, otherwise this file. On Cloud Run you can mount a
+# per-environment copy (e.g. from Secret Manager as a volume) and point RETRIEVAL_CONFIG at it.
+#
+# Never write secrets here. "${NAME}" is replaced with the environment variable NAME at
+# load time (on Cloud Run: --set-secrets DB_PASSWORD=scrag-db-password:latest). A
+# referenced variable that is unset or empty stops startup with an error naming it.
+
+databases:
+  # Postgres + pgvector: the source of truth. Needs the `vector` extension and
+  # chunks(chunk_uuid, judgment_uuid, source_file_uuid, page_start, page_end, content,
+  # is_active, embedding vector(N)); checked at startup.
+  vector:
+    name: scrag
+    user: postgres
+    password: "${DB_PASSWORD}"
+    # Exactly one of: instance_connection_name (Cloud SQL), instance_uri (AlloyDB),
+    # host (direct TCP host or unix socket dir, e.g. the Auth Proxy on 127.0.0.1).
+    instance_connection_name: sc-judgments-rag:asia-south1:sc-rag-pg
+    ip_type: public            # public | private | psc
+    iam_auth: false            # true = IAM database auth; remove `password`
+    pool_size: 5
+    statement_timeout_ms: 5000
+
+  # AlloyDB: the BM25 index, built by bm25_builder/ (a Cloud Run Job).
+  bm25:
+    name: bm25
+    user: postgres
+    password: "${BM25_DB_PASSWORD}"
+    instance_uri: projects/sc-judgments-rag/locations/asia-south1/clusters/CLUSTER/instances/INSTANCE
+    ip_type: private           # private needs Direct VPC egress / a VPC connector on Cloud Run
+    iam_auth: false
+    pool_size: 5
+    statement_timeout_ms: 5000
+
+# Query embedding (Vertex AI). Must be the model that embedded chunks.embedding; the
+# vector dimension is read from the column at startup.
+embedding:
+  project: sc-judgments-rag
+  location: us-central1
+  model: text-embedding-004
+  normalize: true
+
+vector_search:
+  metric: cosine               # cosine | ip | l2; must match the HNSW index opclass
+  ef_search: 200               # HNSW candidate list; ~2x candidate_k. Raised to k automatically if lower
+
+bm25:
+  schema: bm25                 # schema the builder swaps the index into
+  postings_per_term: 5000      # top postings read per query term (fast); 0 = exact scoring
+
+# Query optimization before search (app/retrieval/query_expansion.py). Each step falls
+# back to the plain question if it fails or times out.
+query_expansion:
+  # Vector search: mix the question's embedding with the embedding of a short
+  # judgment-style passage an LLM writes for it (HyDE). Sends the question to Groq.
+  pseudo_query:
+    enabled: true
+    model: openai/gpt-oss-120b     # Groq model id
+    reasoning_effort: low          # for reasoning models (gpt-oss, qwen3); null for others
+    api_key_env: GROQ_API_KEY      # env var holding the key (Secret Manager on Cloud Run)
+    max_tokens: 400                # includes the model's brief reasoning
+    timeout_seconds: 3
+    weight: 0.5                    # share of the pseudo passage in the search vector; 0 = question only
+  # BM25: pseudo-relevance feedback. Terms common in the top BM25 hits are added to the
+  # query with a lower weight and BM25 runs again. No external call.
+  prf:
+    enabled: true
+    feedback_docs: 10              # top first-pass hits assumed relevant
+    expansion_terms: 10            # terms added
+    expansion_weight: 0.3          # weight of the best added term (original terms = 1.0)
+
+# Answer generation (app/retrieval/answer_adapter.py): the backend gets an LLM answer
+# grounded in the retrieved passages, citing them as [n]. Sends the question and the
+# passages to Groq.
+generation:
+  model: openai/gpt-oss-120b
+  reasoning_effort: medium       # more careful than the pseudo query step; null for non-reasoning models
+  api_key_env: GROQ_API_KEY
+  max_tokens: 2000               # answer + the model's reasoning
+  timeout_seconds: 30            # deadline for generation (retrieval has its own)
+  max_passage_chars: 6000        # per passage in the prompt (the returned passage is not cut)
+  max_context_chars: 48000       # all passages in the prompt; lower-ranked ones beyond this are left out
+
+# Cross-encoder reranking of the fused candidates with the Vertex AI Ranking API
+# (Discovery Engine). Enable discoveryengine.googleapis.com and grant the service
+# account roles/discoveryengine.viewer. If a call fails, the fused order is used.
+reranker:
+  enabled: true
+  project: sc-judgments-rag
+  location: global
+  model: semantic-ranker-default@latest
+  timeout_seconds: 5           # up to 200 candidates per call
+
+retrieval:
+  top_k: 10                    # passages returned when the caller gives no limit
+  candidate_k: 100             # candidates from EACH of vector search and BM25 (all reranked)
+  doc_decay: 0.85              # score x0.85 per earlier chunk of the same judgment; 1.0 = no penalty
+  rrf_k: 60                    # reciprocal rank fusion constant
+  timeout_seconds: 10          # deadline for one retrieve() call
+
+# Used only by bm25_builder/.
+bm25_builder:
+  k1: 1.2
+  b: 0.75
+  batch_size: 5000             # source rows per read
+  copy_batch_rows: 200000      # rows per COPY into AlloyDB
+  min_keep_ratio: 0.5          # refuse to replace an index with one below this fraction of its size
+  allow_shrink: false          # true = override min_keep_ratio deliberately

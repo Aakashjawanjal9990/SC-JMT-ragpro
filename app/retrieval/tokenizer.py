@@ -5,13 +5,20 @@
 (kept distinct from "21"). "498A" and "498-A" both become "498-a". Dotted
 acronyms like "Cr.P.C." and "I.P.C." collapse to "crpc" and "ipc".
 
+Plain words are stemmed (Snowball English), so "acquired", "acquiring" and "acquire"
+all match "acquir". References and numbers ("s.438", "498-a", "21-a") are never stemmed.
+
 Bump TOKENIZER_VERSION whenever output changes: saved BM25 indexes record it and
 refuse to load with a different tokenizer.
 """
 
 import re
+import threading
+from functools import lru_cache
 
-TOKENIZER_VERSION = "1"
+import snowballstemmer
+
+TOKENIZER_VERSION = "2"
 
 # Canonical prefixes for provision references.
 _REFERENCE_PREFIXES = {
@@ -48,6 +55,16 @@ _TOKEN = re.compile(
 _NUM_SUFFIX = re.compile(r"^(\d+)([a-z])$")
 
 
+_STEMMER = snowballstemmer.stemmer("english")
+_STEMMER_LOCK = threading.Lock()  # Snowball stemmers keep internal state
+
+
+@lru_cache(maxsize=200_000)  # the vocabulary is small; stemming each word once is enough
+def _stem(word: str) -> str:
+    with _STEMMER_LOCK:
+        return _STEMMER.stemWord(word)
+
+
 def _normalize_number(number: str) -> str:
     return _NUM_SUFFIX.sub(r"\1-\2", number)
 
@@ -79,5 +96,5 @@ def tokenize(text: str) -> list[str]:
             word = match.group("word")
             pending_prefix = _REFERENCE_PREFIXES.get(word)
             if len(word) > 1 and word not in STOPWORDS:
-                tokens.append(word)
+                tokens.append(_stem(word))
     return tokens

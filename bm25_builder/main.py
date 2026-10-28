@@ -1,19 +1,24 @@
 """BM25 index builder — run as a Cloud Run Job after each ingestion run.
 
-Reads every citable chunk from the source database (Cloud SQL `scrag`) and writes
-the BM25 index the retrieval module queries (app/retrieval/bm25_pg.py) into the
-BM25 database (AlloyDB):
+Reads every citable chunk from the vector database (databases.vector in config.yaml)
+and writes the BM25 index the retrieval module queries (app/retrieval/bm25_pg.py)
+into the BM25 database (AlloyDB, databases.bm25):
 
     <schema>.meta(key, value)                      tokenizer_version, corpus stats
-    <schema>.chunks(chunk_uuid PK, judgment_uuid, source_file_uuid, judgment_date, doc_len)
+    <schema>.chunks(chunk_uuid PK, judgment_uuid, source_file_uuid, judgment_date,
+                    page_start, page_end, content, doc_len)
+                                                   the backend returns text/pages from here
     <schema>.postings(term, chunk_uuid, weight)    PK (term, chunk_uuid),
                                                    index (term, weight DESC) INCLUDE (chunk_uuid)
+    <schema>.terms(term PK, df)                    chunks containing each term (idf for
+                                                   pseudo-relevance feedback)
 
 weight = Lucene BM25 contribution: idf(term) * tf * (k1 + 1) / (tf + k1 * (1 - b + b * dl / avgdl)).
 
-Steps: take an advisory lock (one build at a time) -> read chunks twice inside one
-REPEATABLE READ snapshot (pass 1: document frequencies and lengths; pass 2: weights,
-streamed with COPY into a staging schema) -> build indexes -> atomic swap. The old
+Steps: take an advisory lock (one build at a time) -> read chunks three times inside
+one REPEATABLE READ snapshot (pass 1: document frequencies and lengths; pass 2: chunk
+rows; pass 3: weights; both streamed with COPY into a staging schema) -> build
+indexes -> atomic swap. The old
 index is kept as <schema>_previous for rollback. Exits non-zero on failure so the
 Cloud Run Job can retry.
 """
@@ -33,7 +38,10 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
-BUILDER_VERSION = "1"
+import yaml
+
+BUILDER_VERSION = "3"
+INDEX_FORMAT = "3"  # chunks carries content and pages, plus terms(df); must match app/retrieval/bm25_pg.py
 
 logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 logger = logging.getLogger("bm25_builder")
@@ -61,55 +69,84 @@ def _load_tokenizer():
 
 tokenizer = _load_tokenizer()
 
-# --- configuration -------------------------------------------------------------------
+# --- configuration (config.yaml, shared with app/retrieval/config.py) ----------------------
 
 
-def env(name: str, default: str | None = None) -> str | None:
-    value = os.getenv(name)
-    return value.strip() if value and value.strip() else default
+def _config_path() -> Path:
+    """$RETRIEVAL_CONFIG, else config.yaml next to this file (image) or at the repo root."""
+    if path := os.getenv("RETRIEVAL_CONFIG"):
+        return Path(path)
+    here = Path(__file__).resolve().parent
+    return next((p for p in (here / "config.yaml", here.parent / "config.yaml") if p.exists()), here / "config.yaml")
 
 
-SCHEMA = env("BM25_SCHEMA", "bm25")  # must match RETRIEVAL_BM25_SCHEMA in the backend
-K1 = float(env("BM25_K1", "1.2"))
-B = float(env("BM25_B", "0.75"))
-BATCH_SIZE = int(env("BM25_BATCH_SIZE", "5000"))
-COPY_BATCH_ROWS = int(env("BM25_COPY_BATCH_ROWS", "200000"))
-# Refuse to replace an index with one this much smaller (protects against a bad or
-# empty source read). Set BM25_ALLOW_SHRINK=true to override deliberately.
-MIN_KEEP_RATIO = float(env("BM25_MIN_KEEP_RATIO", "0.5"))
-ALLOW_SHRINK = (env("BM25_ALLOW_SHRINK", "false") or "").lower() in {"1", "true", "yes"}
+def _expand_env(value: Any) -> Any:
+    """Replace ${NAME} with the environment variable NAME (same rule as the backend)."""
+    if isinstance(value, dict):
+        return {key: _expand_env(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_env(item) for item in value]
+    if isinstance(value, str):
+        def lookup(match: re.Match) -> str:
+            if not (found := os.getenv(match.group(1))):
+                raise SystemExit(f"config references ${{{match.group(1)}}} but it is not set")
+            return found
+
+        return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lookup, value)
+    return value
+
+
+def _as_bool(value: Any) -> bool:
+    return value if isinstance(value, bool) else str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+with _config_path().open(encoding="utf-8") as _handle:
+    CONFIG = _expand_env(yaml.safe_load(_handle) or {})
+try:
+    VECTOR_DB = CONFIG["databases"]["vector"]  # source: chunks
+    BM25_DB = CONFIG["databases"]["bm25"]  # target: the BM25 index
+    SCHEMA = str(CONFIG["bm25"]["schema"])
+    _build = CONFIG["bm25_builder"]
+    K1 = float(_build["k1"])
+    B = float(_build["b"])
+    BATCH_SIZE = int(_build["batch_size"])
+    COPY_BATCH_ROWS = int(_build["copy_batch_rows"])
+    # Refuse to replace an index with one this much smaller (protects against a bad or
+    # empty source read). Set allow_shrink: true to override deliberately.
+    MIN_KEEP_RATIO = float(_build["min_keep_ratio"])
+    ALLOW_SHRINK = _as_bool(_build["allow_shrink"])
+except (KeyError, TypeError) as exc:
+    raise SystemExit(f"config.yaml is missing {exc}") from None
 LOCK_KEY = 726_311_438  # advisory lock id for "bm25 build"
 
-if not re.fullmatch(r"[a-z_][a-z0-9_]{0,40}", SCHEMA or ""):
-    raise SystemExit(f"Invalid BM25_SCHEMA: {SCHEMA!r}")
+if not re.fullmatch(r"[a-z_][a-z0-9_]{0,40}", SCHEMA):
+    raise SystemExit(f"Invalid bm25.schema: {SCHEMA!r}")
 STAGING, PREVIOUS = f"{SCHEMA}_build", f"{SCHEMA}_previous"
 
 
-def connect(prefix: str):
-    """Connect using {prefix}DB_NAME/DB_USER/DB_PASSWORD and one of
-    {prefix}DB_HOST (direct / Auth Proxy), {prefix}INSTANCE_CONNECTION_NAME (Cloud SQL)
-    or {prefix}INSTANCE_URI (AlloyDB). Returns (connection, connector or None)."""
-    name, user = env(f"{prefix}DB_NAME"), env(f"{prefix}DB_USER")
-    password = os.getenv(f"{prefix}DB_PASSWORD") or None
-    iam = (env(f"{prefix}DB_IAM_AUTH", "false") or "").lower() in {"1", "true", "yes"}
-    ip_type = (env(f"{prefix}DB_IP_TYPE", "private") or "private").upper()
-    host = env(f"{prefix}DB_HOST")
+def connect(db: dict[str, Any], label: str):
+    """Connect with a databases.<label> entry: name/user/password and one of host
+    (direct / Auth Proxy), instance_connection_name (Cloud SQL) or instance_uri
+    (AlloyDB). Returns (connection, connector or None)."""
+    name, user, password = db.get("name"), db.get("user"), db.get("password") or None
+    iam = _as_bool(db.get("iam_auth", False))
+    ip_type = str(db.get("ip_type", "private")).upper()
     if not name:
-        raise SystemExit(f"{prefix}DB_NAME is not set")
-    if host:
+        raise SystemExit(f"databases.{label}.name is not set")
+    if host := db.get("host"):
         import pg8000.dbapi
 
-        port = int(env(f"{prefix}DB_PORT", "5432"))
+        port = int(db.get("port", 5432))
         address = {"unix_sock": f"{host}/.s.PGSQL.{port}"} if host.startswith("/") else {"host": host, "port": port}
         return pg8000.dbapi.connect(user=user, password=password, database=name, **address), None
-    if icn := env(f"{prefix}INSTANCE_CONNECTION_NAME"):
+    if icn := db.get("instance_connection_name"):
         from google.cloud.sql.connector import Connector, IPTypes
         instance = icn
-    elif uri := env(f"{prefix}INSTANCE_URI"):
+    elif uri := db.get("instance_uri"):
         from google.cloud.alloydb.connector import Connector, IPTypes
         instance = uri
     else:
-        raise SystemExit(f"Set {prefix}DB_HOST, {prefix}INSTANCE_CONNECTION_NAME or {prefix}INSTANCE_URI")
+        raise SystemExit(f"Set host, instance_connection_name or instance_uri in databases.{label}")
     connector = Connector()
     connection = connector.connect(
         instance, "pg8000", user=user, password=None if iam else password, db=name,
@@ -118,13 +155,13 @@ def connect(prefix: str):
     return connection, connector
 
 
-# --- source reading (Cloud SQL) --------------------------------------------------------
+# --- source reading (vector database) --------------------------------------------------------
 
 # Must match the retrieval module's "citable" rule (app/retrieval/pg_store.py). The
 # database has only the chunks table, so there is no judgment date (written as NULL).
 _SOURCE_SQL = """
     SELECT c.chunk_uuid::text, c.judgment_uuid::text, c.source_file_uuid::text,
-           NULL::date AS judgment_date, c.content
+           NULL::date AS judgment_date, c.page_start, c.page_end, c.content
     FROM chunks c
     WHERE c.is_active
       AND c.chunk_uuid > %s::uuid
@@ -132,7 +169,7 @@ _SOURCE_SQL = """
     LIMIT %s"""
 
 
-def iter_source_chunks(cursor) -> Iterator[tuple[str, str, str, Any, str]]:
+def iter_source_chunks(cursor) -> Iterator[tuple[str, str, str, Any, int, int, str]]:
     after = "00000000-0000-0000-0000-000000000000"
     while True:
         cursor.execute(_SOURCE_SQL, (after, BATCH_SIZE))
@@ -184,8 +221,8 @@ def idf(df: int, n: int) -> float:
 
 def build() -> dict[str, Any]:
     started = time.perf_counter()
-    source, source_connector = connect("")
-    target, target_connector = connect("BM25_")
+    source, source_connector = connect(VECTOR_DB, "vector")
+    target, target_connector = connect(BM25_DB, "bm25")
     try:
         tcur = target.cursor()
         tcur.execute("SELECT pg_try_advisory_lock(%s)", (LOCK_KEY,))
@@ -195,21 +232,20 @@ def build() -> dict[str, Any]:
         previous_count = existing_chunk_count(tcur)
         target.commit()
 
-        # One consistent snapshot of the source for both passes.
+        # One consistent snapshot of the source for all passes.
         scur = source.cursor()
         scur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         scur.execute("SET LOCAL statement_timeout = 0")
 
         # Pass 1: document frequencies and lengths.
         df: Counter[str] = Counter()
-        chunk_rows: list[tuple[Any, ...]] = []
-        total_len = 0
-        for chunk_uuid, judgment_uuid, source_file_uuid, judgment_date, content in iter_source_chunks(scur):
+        doc_lens: dict[str, int] = {}
+        for chunk_uuid, *_, content in iter_source_chunks(scur):
             tokens = tokenizer.tokenize(content or "")
             df.update(set(tokens))
-            total_len += len(tokens)
-            chunk_rows.append((chunk_uuid, judgment_uuid, source_file_uuid, judgment_date, len(tokens)))
-        n = len(chunk_rows)
+            doc_lens[chunk_uuid] = len(tokens)
+        n = len(doc_lens)
+        total_len = sum(doc_lens.values())
         avgdl = (total_len / n) if n else 1.0
         avgdl = avgdl or 1.0
         log("pass 1 complete", chunks=n, terms=len(df), avgdl=round(avgdl, 2))
@@ -217,7 +253,7 @@ def build() -> dict[str, Any]:
         if previous_count and n < previous_count * MIN_KEEP_RATIO and not ALLOW_SHRINK:
             raise SystemExit(
                 f"Refusing to replace an index of {previous_count} chunks with {n} "
-                f"(below BM25_MIN_KEEP_RATIO={MIN_KEEP_RATIO}); set BM25_ALLOW_SHRINK=true to override"
+                f"(below bm25_builder.min_keep_ratio={MIN_KEEP_RATIO}); set allow_shrink: true to override"
             )
 
         # Staging schema.
@@ -228,16 +264,28 @@ def build() -> dict[str, Any]:
         tcur.execute(
             f"""CREATE TABLE {STAGING}.chunks (
                 chunk_uuid uuid PRIMARY KEY, judgment_uuid uuid NOT NULL,
-                source_file_uuid uuid NOT NULL, judgment_date date, doc_len int NOT NULL)"""
+                source_file_uuid uuid NOT NULL, judgment_date date,
+                page_start int, page_end int, content text, doc_len int NOT NULL)"""
         )
         tcur.execute(f"CREATE TABLE {STAGING}.postings (term text NOT NULL, chunk_uuid uuid NOT NULL, weight real NOT NULL)")
+        tcur.execute(f"CREATE TABLE {STAGING}.terms (term text PRIMARY KEY, df int NOT NULL)")
         target.commit()
-        copy_rows(target, f"{STAGING}.chunks", chunk_rows)
-        del chunk_rows
 
-        # Pass 2: weights (same snapshot, so every term is in df).
+        # Pass 2: chunk rows with text and pages, streamed (not held in memory).
+        copy_rows(
+            target,
+            f"{STAGING}.chunks",
+            (
+                (*row, doc_lens[row[0]])
+                for row in iter_source_chunks(scur)
+            ),
+        )
+        del doc_lens
+        log("pass 2 complete", chunks=n)
+
+        # Pass 3: weights (same snapshot, so every term is in df).
         def postings() -> Iterator[tuple[str, str, float]]:
-            for chunk_uuid, _, _, _, content in iter_source_chunks(scur):
+            for chunk_uuid, *_, content in iter_source_chunks(scur):
                 tokens = tokenizer.tokenize(content or "")
                 norm = K1 * (1 - B + B * len(tokens) / avgdl)
                 for term, tf in Counter(tokens).items():
@@ -245,11 +293,12 @@ def build() -> dict[str, Any]:
 
         num_postings = copy_rows(target, f"{STAGING}.postings", postings())
         source.rollback()  # end the read-only snapshot
-        log("pass 2 complete", postings=num_postings)
+        log("pass 3 complete", postings=num_postings)
 
         meta = {
             "tokenizer_version": tokenizer.TOKENIZER_VERSION,
             "builder_version": BUILDER_VERSION,
+            "index_format": INDEX_FORMAT,
             "num_chunks": n,
             "num_terms": len(df),
             "num_postings": num_postings,
@@ -260,14 +309,14 @@ def build() -> dict[str, Any]:
             "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         copy_rows(target, f"{STAGING}.meta", meta.items())
+        copy_rows(target, f"{STAGING}.terms", df.items())
 
         tcur.execute("SET maintenance_work_mem = '1GB'")
         tcur.execute(f"ALTER TABLE {STAGING}.postings ADD PRIMARY KEY (term, chunk_uuid)")
         tcur.execute(f"CREATE INDEX ON {STAGING}.postings (term, weight DESC) INCLUDE (chunk_uuid)")
-        tcur.execute(f"CREATE INDEX ON {STAGING}.chunks (judgment_uuid)")
-        tcur.execute(f"CREATE INDEX ON {STAGING}.chunks (judgment_date)")
         tcur.execute(f"ANALYZE {STAGING}.postings")
         tcur.execute(f"ANALYZE {STAGING}.chunks")
+        tcur.execute(f"ANALYZE {STAGING}.terms")
         target.commit()
         log("indexes built")
 

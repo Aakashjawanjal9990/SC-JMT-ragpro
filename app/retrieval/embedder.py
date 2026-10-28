@@ -1,80 +1,27 @@
-"""CPU query embedding with the same model, prefix and normalization as indexing."""
+"""Query embedding with the Vertex AI model that embedded chunks.embedding."""
 
-import os
 import threading
 
 import numpy as np
 
-# The query path is PyTorch-only; skip TensorFlow so a broken TF/Keras install
-# elsewhere on the machine cannot break model loading.
-os.environ.setdefault("USE_TF", "0")
-
-
-class QueryEmbedder:
-    def __init__(
-        self,
-        model_name: str,
-        normalize: bool = True,
-        query_prefix: str = "",
-        expected_dimensions: int | None = None,
-    ) -> None:
-        if not model_name:
-            raise ValueError(
-                "Set RETRIEVAL_EMBEDDING_MODEL to the model used at indexing time"
-            )
-        self.model_name = model_name
-        self.normalize = normalize
-        self.query_prefix = query_prefix
-        self.expected_dimensions = expected_dimensions
-        self._model = None
-        self._lock = threading.Lock()
-
-    def _load(self):
-        with self._lock:
-            if self._model is None:
-                from sentence_transformers import SentenceTransformer
-
-                self._model = SentenceTransformer(self.model_name, device="cpu")
-        return self._model
-
-    def warmup(self) -> None:
-        """Load the model and check it produces vectors of the indexed dimension."""
-        vector = self.embed("warmup")
-        if self.expected_dimensions and vector.shape[-1] != self.expected_dimensions:
-            raise RuntimeError(
-                f"{self.model_name} produces {vector.shape[-1]}-d vectors but the index "
-                f"expects {self.expected_dimensions}-d (embedding_models.dimensions)"
-            )
-
-    def embed(self, query: str) -> np.ndarray:
-        model = self._model or self._load()
-        vector = model.encode(
-            self.query_prefix + query,
-            normalize_embeddings=self.normalize,
-            convert_to_numpy=True,
-            show_progress_bar=False,
-        )
-        return np.asarray(vector, dtype=np.float32)
-
 
 class VertexQueryEmbedder:
-    """Query embedding with a Vertex AI model (e.g. text-embedding-004, 768-d) via the
+    """Query embedding with a Vertex AI model (e.g. text-embedding-004) via the
     google-genai SDK. Uses task type RETRIEVAL_QUERY, the query-side counterpart of the
     RETRIEVAL_DOCUMENT task used for chunks. Credentials come from Application Default
-    Credentials (GOOGLE_APPLICATION_CREDENTIALS locally, the service account on Cloud Run).
+    Credentials (the service account on Cloud Run).
     """
 
     def __init__(
         self,
-        model_name: str = "text-embedding-004",
-        project: str | None = None,
-        location: str = "us-central1",
+        model_name: str,
+        project: str,
+        location: str,
+        *,
         normalize: bool = True,
         expected_dimensions: int | None = None,
         task_type: str = "RETRIEVAL_QUERY",
     ) -> None:
-        if not project:
-            raise ValueError("Set GCP_PROJECT for Vertex AI query embedding")
         self.model_name = model_name
         self.project = project
         self.location = location
@@ -93,6 +40,7 @@ class VertexQueryEmbedder:
         return self._client
 
     def warmup(self) -> None:
+        """Open the client and check the model returns vectors of the indexed dimension."""
         vector = self.embed("warmup")
         if self.expected_dimensions and vector.shape[-1] != self.expected_dimensions:
             raise RuntimeError(
@@ -101,44 +49,24 @@ class VertexQueryEmbedder:
             )
 
     def embed(self, query: str) -> np.ndarray:
+        return self._embed(query, self.task_type)
+
+    def embed_document(self, text: str) -> np.ndarray:
+        """Embed text as a document (RETRIEVAL_DOCUMENT, like the chunks), e.g. a
+        pseudo passage written to look like a judgment."""
+        return self._embed(text, "RETRIEVAL_DOCUMENT")
+
+    def _embed(self, text: str, task_type: str) -> np.ndarray:
         from google.genai import types
 
         response = (self._client or self._get_client()).models.embed_content(
             model=self.model_name,
-            contents=query,
+            contents=text,
             config=types.EmbedContentConfig(
-                task_type=self.task_type, output_dimensionality=self.expected_dimensions
+                task_type=task_type, output_dimensionality=self.expected_dimensions
             ),
         )
         vector = np.asarray(response.embeddings[0].values, dtype=np.float32)
         if self.normalize:
             vector /= max(float(np.linalg.norm(vector)), 1e-12)
         return vector
-
-
-VERTEX_PROVIDERS = {"vertex", "vertexai", "vertex_ai", "google", "gemini"}
-
-
-def make_query_embedder(
-    provider: str | None,
-    model_name: str,
-    *,
-    normalize: bool = True,
-    query_prefix: str = "",
-    expected_dimensions: int | None = None,
-    project: str | None = None,
-    location: str = "us-central1",
-):
-    """"local" (sentence-transformers on CPU) or a Vertex provider name."""
-    provider = (provider or "local").lower()
-    if provider in VERTEX_PROVIDERS:
-        return VertexQueryEmbedder(
-            model_name, project=project, location=location,
-            normalize=normalize, expected_dimensions=expected_dimensions,
-        )
-    if provider in {"local", "sentence-transformers", "sentence_transformers", "huggingface", "hf"}:
-        return QueryEmbedder(
-            model_name, normalize=normalize, query_prefix=query_prefix,
-            expected_dimensions=expected_dimensions,
-        )
-    raise NotImplementedError(f"Query embedding provider {provider!r} is not supported")
