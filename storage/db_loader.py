@@ -66,8 +66,12 @@ class DatabaseLoader:
         file_size = os.path.getsize(doc_rec.file_path) if (doc_rec.file_path and os.path.exists(doc_rec.file_path)) else 0
         file_sha256 = None
         if doc_rec.file_path and os.path.exists(doc_rec.file_path):
+            # OFF-10: Stream hash in bounded 64 KiB chunks for constant memory
+            h = hashlib.sha256()
             with open(doc_rec.file_path, "rb") as f:
-                file_sha256 = hashlib.sha256(f.read()).hexdigest()
+                for chunk in iter(lambda: f.read(65536), b""):
+                    h.update(chunk)
+            file_sha256 = h.hexdigest()
 
         with self.engine.begin() as conn:
             # -------------------------------------------------------------

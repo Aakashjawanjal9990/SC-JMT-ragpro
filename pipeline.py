@@ -72,8 +72,10 @@ class IngestionPipeline:
             year = year or 2026
 
         t0 = time.time()
-        doc = fitz.open(path)
+        # OFF-07: Wrap fitz.open in try/finally to prevent temp file leak
+        doc = None
         try:
+            doc = fitz.open(path)
             total_pages = len(doc)
             if total_pages == 0:
                 raise ValueError(f"Empty PDF document: {pdf_path}")
@@ -233,15 +235,19 @@ class IngestionPipeline:
             tracker.finalize(total_pages=total_pages, total_chunks=len(all_chunks), ocr_quality=avg_q)
             try:
                 export_verification_csv(config.logss_dir / "pipeline_verification_master.csv")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to export verification CSV: {e}")
 
         finally:
-            doc.close()
+            if doc is not None:
+                try:
+                    doc.close()
+                except Exception:
+                    pass
             if temp_file_to_clean and os.path.exists(temp_file_to_clean):
                 try:
                     os.remove(temp_file_to_clean)
-                except OSError:
-                    pass
+                except OSError as e:
+                    logger.warning(f"Could not remove temp file {temp_file_to_clean}: {e}")
 
         return doc_record

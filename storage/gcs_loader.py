@@ -17,8 +17,8 @@ class GCSDataLoader:
     """Manages GCP Cloud Storage connections and streams PDFs from production buckets."""
 
     def __init__(self, bucket_name: Optional[str] = None, project_id: Optional[str] = None):
-        self.bucket_name = bucket_name or os.getenv("GCS_BUCKET", "sc-judgments-rag-prod-data")
-        self.project_id = project_id or os.getenv("GCP_PROJECT", "sc-judgments-rag-prod")
+        self.bucket_name = bucket_name or os.getenv("GCS_BUCKET", "sc-judgments-dev-data")
+        self.project_id = project_id or os.getenv("GCP_PROJECT", "sc-judgments-dev")
         self.client = None
         self.bucket = None
         self._init_client()
@@ -61,6 +61,9 @@ class GCSDataLoader:
             raise ValueError(f"Invalid GCS URI: {gcs_uri}")
 
         b_name, blob_name = match.groups()
+        # Security Policy (OFF-02): Disallow arbitrary bucket access; constrain to configured bucket
+        if b_name != self.bucket_name:
+            raise PermissionError(f"Security Policy Violation: Access to bucket '{b_name}' denied. Constrained to '{self.bucket_name}'.")
         blob = self.client.bucket(b_name).blob(blob_name)
 
         yr_match = re.search(r"year=(\d{4})", blob_name)
@@ -74,7 +77,12 @@ class GCSDataLoader:
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="gcs_scj_")
         os.close(tmp_fd)
 
-        blob.download_to_filename(tmp_path)
+        try:
+            blob.download_to_filename(tmp_path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
         logger.info(f"Downloaded GCS blob {gcs_uri} -> {tmp_path}")
         return tmp_path, year
 

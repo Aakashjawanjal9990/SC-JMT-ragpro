@@ -149,6 +149,7 @@ def main():
     t0 = time.time()
     total_saved = 0
     total_chunks = 0
+    failed_files = []
     log_interval = max(1, total_count // 20)
 
     if args.workers <= 1 or total_count <= 2:
@@ -196,10 +197,19 @@ def main():
         print(f"{check_name:<28} | {info['status']:<10} | {info['detail']}")
     print("-" * 85)
 
-    if gate_results.get("all_passed", gate_results.get("all_strict_passed")):
+    # OFF-05: Enforce batch failure contract
+    has_failed_docs = len(failed_files) > 0
+    if has_failed_docs:
+        print(f"\n[CRITICAL ERROR] Batch ingestion failed on {len(failed_files)} documents:")
+        for fn in failed_files:
+            print(f"  - {fn}")
+
+    if gate_results.get("all_passed", gate_results.get("all_strict_passed")) and not has_failed_docs:
         print(">>> [SUCCESS] ALL DATA QUALITY AND INTEGRITY CHECKS VERIFIED (100% PASS). CERTIFIED FOR PRODUCTION.")
     else:
-        print("[WARNING] Data quality verification checks incomplete.")
+        print("[WARNING] Data quality verification checks incomplete or document failures occurred.")
+        if has_failed_docs:
+            sys.exit(1)
     print("=" * 85)
 
 

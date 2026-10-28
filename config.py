@@ -23,9 +23,17 @@ except ImportError:
     PCEV2_ROOT = Path(__file__).resolve().parent
 
 
+from urllib.parse import quote_plus
+
 def resolve_database_url(pcev2_root: Path) -> str:
-    """Resolves database URL from DATABASE_TARGET, DATABASE_URL, or individual DB_* credentials."""
+    """
+    Resolves database URL from DATABASE_TARGET, DATABASE_URL, or individual DB_* credentials.
+    Uses URL-encoding (quote_plus) to safely handle reserved characters (e.g., '@' in passwords).
+    Enforces configurable TLS sslmode policy for remote PostgreSQL / AlloyDB connections.
+    """
     target = os.getenv("DATABASE_TARGET", "").lower()
+    sslmode = os.getenv("DB_SSLMODE", "prefer")
+    
     if target in ("alloydb", "postgres", "postgresql", "prod", "production"):
         alloy_url = os.getenv("ALLOYDB_DATABASE_URL")
         if alloy_url:
@@ -35,7 +43,8 @@ def resolve_database_url(pcev2_root: Path) -> str:
         db_host = os.getenv("DB_HOST", "34.93.114.95")
         db_port = os.getenv("DB_PORT", "5432")
         db_name = os.getenv("DB_NAME", "scrag")
-        return f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
+        enc_pass = quote_plus(db_pass)
+        return f"postgresql+psycopg2://{db_user}:{enc_pass}@{db_host}:{db_port}/{db_name}?sslmode={sslmode}"
 
     db_url = os.getenv("DATABASE_URL")
     if db_url:
@@ -49,7 +58,8 @@ def resolve_database_url(pcev2_root: Path) -> str:
     db_name = os.getenv("DB_NAME")
 
     if db_user and db_pass and db_name:
-        return f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
+        enc_pass = quote_plus(db_pass)
+        return f"postgresql+psycopg2://{db_user}:{enc_pass}@{db_host}:{db_port}/{db_name}?sslmode={sslmode}"
 
     # Default to local SQLite database in output directory
     return f"sqlite:///{(pcev2_root / 'output' / 'scj_rag_v2.db').as_posix()}"
@@ -63,10 +73,10 @@ class PipelineConfig:
     vector_mode: str = os.getenv("VECTOR_MODE", "external")
     allow_mock_embeddings: bool = os.getenv("ALLOW_MOCK_EMBEDDINGS", "false").lower() in ("true", "1", "yes")
     
-    # Google Cloud Platform (GCP) & Cloud Storage (GCS)
-    gcp_project: str = os.getenv("GCP_PROJECT", "sc-judgments-rag-prod")
+    # Google Cloud Platform (GCP) & Cloud Storage (GCS) - OFF-01: Safe default for offline dev
+    gcp_project: str = os.getenv("GCP_PROJECT", "sc-judgments-dev")
     gcp_location: str = os.getenv("GCP_LOCATION", "us-central1")
-    gcs_bucket: str = os.getenv("GCS_BUCKET", "sc-judgments-rag-prod-data")
+    gcs_bucket: str = os.getenv("GCS_BUCKET", "sc-judgments-dev-data")
     gcs_prefix: str = os.getenv("GCS_PREFIX", "raw_pdfs/pdfs")
     
     # Vertex AI Embedding Engine
