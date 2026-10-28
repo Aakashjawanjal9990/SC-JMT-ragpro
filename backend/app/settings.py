@@ -32,6 +32,14 @@ class Settings:
     google_cloud_location: str | None = None
     vertex_model_id: str | None = None
     vertex_embedding_model_id: str | None = None
+    answer_generation_provider: str = "vertex"
+    groq_api_key: str | None = None
+    groq_model_id: str = "openai/gpt-oss-120b"
+    groq_generation_reasoning_effort: str = "medium"
+    groq_generation_max_tokens: int = 2000
+    groq_generation_timeout_seconds: float = 30.0
+    groq_max_passage_chars: int = 6000
+    groq_max_context_chars: int = 48_000
     rate_limit_requests: int = 30
     rate_limit_window_seconds: int = 60
     auth_identity_rate_limit_requests: int = 8
@@ -167,6 +175,29 @@ class Settings:
         google_cloud_location = os.getenv("GOOGLE_CLOUD_LOCATION") or None
         vertex_model_id = os.getenv("VERTEX_MODEL_ID") or None
         vertex_embedding_model_id = os.getenv("VERTEX_EMBEDDING_MODEL_ID") or None
+        answer_generation_provider = (
+            os.getenv("ANSWER_GENERATION_PROVIDER", "vertex").strip().lower()
+        )
+        groq_api_key = os.getenv("GROQ_API_KEY") or None
+        groq_model_id = os.getenv("GROQ_MODEL_ID", "openai/gpt-oss-120b").strip()
+        groq_generation_reasoning_effort = os.getenv(
+            "GROQ_GENERATION_REASONING_EFFORT", "medium"
+        ).strip()
+        try:
+            groq_generation_max_tokens = int(os.getenv("GROQ_GENERATION_MAX_TOKENS", "2000"))
+            groq_generation_timeout_seconds = float(
+                os.getenv("GROQ_GENERATION_TIMEOUT_SECONDS", "30")
+            )
+            groq_max_passage_chars = int(os.getenv("GROQ_MAX_PASSAGE_CHARS", "6000"))
+            groq_max_context_chars = int(os.getenv("GROQ_MAX_CONTEXT_CHARS", "48000"))
+        except ValueError as exc:
+            raise ValueError("Groq generation limits must be numeric.") from exc
+        if answer_generation_provider not in {"vertex", "groq"}:
+            raise ValueError("ANSWER_GENERATION_PROVIDER must be 'vertex' or 'groq'.")
+        if answer_generation_provider == "groq" and not groq_api_key:
+            raise ValueError("GROQ_API_KEY is required when ANSWER_GENERATION_PROVIDER=groq.")
+        if not groq_model_id or len(groq_model_id) > 128:
+            raise ValueError("GROQ_MODEL_ID must contain between 1 and 128 characters.")
         if environment.lower() in {"prod", "production"}:
             required = {
                 "DATABASE_URL": database_url,
@@ -230,6 +261,14 @@ class Settings:
             google_cloud_location=google_cloud_location,
             vertex_model_id=vertex_model_id,
             vertex_embedding_model_id=vertex_embedding_model_id,
+            answer_generation_provider=answer_generation_provider,
+            groq_api_key=groq_api_key,
+            groq_model_id=groq_model_id,
+            groq_generation_reasoning_effort=groq_generation_reasoning_effort or "medium",
+            groq_generation_max_tokens=groq_generation_max_tokens,
+            groq_generation_timeout_seconds=groq_generation_timeout_seconds,
+            groq_max_passage_chars=groq_max_passage_chars,
+            groq_max_context_chars=groq_max_context_chars,
             rate_limit_requests=rate_limit_requests,
             rate_limit_window_seconds=rate_limit_window_seconds,
             auth_identity_rate_limit_requests=auth_identity_rate_limit_requests,

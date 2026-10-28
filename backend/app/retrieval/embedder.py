@@ -116,6 +116,23 @@ class VertexQueryEmbedder:
             vector /= max(float(np.linalg.norm(vector)), 1e-12)
         return vector
 
+    def embed_document(self, text: str) -> np.ndarray:
+        """Embedding used for HyDE pseudo-passages, matching the stored document vectors."""
+        from google.genai import types
+
+        response = (self._client or self._get_client()).models.embed_content(
+            model=self.model_name,
+            contents=text,
+            config=types.EmbedContentConfig(
+                task_type="RETRIEVAL_DOCUMENT",
+                output_dimensionality=self.expected_dimensions,
+            ),
+        )
+        vector = np.asarray(response.embeddings[0].values, dtype=np.float32)
+        if self.normalize:
+            vector /= max(float(np.linalg.norm(vector)), 1e-12)
+        return vector
+
 
 class DeterministicTestEmbedder:
     """Hash-based vectors for local wiring tests only; these are not semantic embeddings."""
