@@ -30,11 +30,10 @@ steps:
       - --platform=managed
       - --allow-unauthenticated
       - --service-account=${_RUNTIME_SERVICE_ACCOUNT}
-      - --add-cloudsql-instances=${_CLOUD_SQL_INSTANCE}
       - --vpc-connector=${_VPC_CONNECTOR}
       - --vpc-egress=private-ranges-only
-      - --set-env-vars=^@^APP_ENV=production@GOOGLE_CLOUD_PROJECT=${PROJECT_ID}@GOOGLE_CLOUD_LOCATION=${_VERTEX_LOCATION}@VERTEX_MODEL_ID=${_VERTEX_MODEL_ID}@VERTEX_EMBEDDING_MODEL_ID=${_VERTEX_EMBEDDING_MODEL_ID}@CORS_ORIGINS=${_CORS_ORIGINS}@SESSION_COOKIE_NAME=__Host-nm_session@SESSION_COOKIE_SAMESITE=${_SESSION_COOKIE_SAMESITE}@SMTP_HOST=${_SMTP_HOST}@SMTP_PORT=${_SMTP_PORT}@SMTP_FROM_EMAIL=${_SMTP_FROM_EMAIL}@SMTP_STARTTLS=true@RETRIEVAL_PORT_ADAPTER_ENABLED=false@RETRIEVAL_BM25_BACKEND=none
-      - --set-secrets=DATABASE_URL=${_DATABASE_URL_SECRET}:latest,REDIS_URL=${_REDIS_URL_SECRET}:latest,AUTH_CHALLENGE_SECRET=${_AUTH_CHALLENGE_SECRET}:latest,SMTP_USERNAME=${_SMTP_USERNAME_SECRET}:latest,SMTP_PASSWORD=${_SMTP_PASSWORD_SECRET}:latest
+      - --set-env-vars=^@^APP_ENV=production@CORS_ORIGINS=${_CORS_ORIGINS}@SESSION_COOKIE_NAME=__Host-nm_session@SESSION_COOKIE_SAMESITE=${_SESSION_COOKIE_SAMESITE}@SMTP_HOST=${_SMTP_HOST}@SMTP_PORT=${_SMTP_PORT}@SMTP_FROM_EMAIL=${_SMTP_FROM_EMAIL}@SMTP_STARTTLS=true@RETRIEVAL_PORT_ADAPTER_ENABLED=false
+      - --set-secrets=DATABASE_URL=${_DATABASE_URL_SECRET}:latest,REDIS_URL=${_REDIS_URL_SECRET}:latest,AUTH_CHALLENGE_SECRET=${_AUTH_CHALLENGE_SECRET}:latest,GROQ_API_KEY=${_GROQ_API_KEY_SECRET}:latest,SMTP_USERNAME=${_SMTP_USERNAME_SECRET}:latest,SMTP_PASSWORD=${_SMTP_PASSWORD_SECRET}:latest
       - --concurrency=40
       - --cpu=1
       - --memory=1Gi
@@ -53,14 +52,11 @@ substitutions:
   _REGION: asia-south1
   _SERVICE: supreme-court-rag-api
   _IMAGE: asia-south1-docker.pkg.dev/$PROJECT_ID/backend/api:$COMMIT_SHA
-  _CLOUD_SQL_INSTANCE: replace-with-project:asia-south1:replace-with-instance
   _RUNTIME_SERVICE_ACCOUNT: replace-with-cloud-run-runtime@$PROJECT_ID.iam.gserviceaccount.com
   _VPC_CONNECTOR: replace-with-serverless-vpc-connector
   _DATABASE_URL_SECRET: backend-database-url
   _REDIS_URL_SECRET: backend-redis-url
-  _VERTEX_LOCATION: replace-with-model-supported-region
-  _VERTEX_MODEL_ID: replace-with-current-supported-model-id
-  _VERTEX_EMBEDDING_MODEL_ID: gemini-embedding-001
+  _GROQ_API_KEY_SECRET: backend-groq-api-key
   _CORS_ORIGINS: https://replace-with-frontend-origin
   _SESSION_COOKIE_SAMESITE: none
   _SMTP_HOST: replace-with-smtp-host

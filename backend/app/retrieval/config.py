@@ -52,15 +52,10 @@ class RetrievalSettings:
     # Query embedding (no embedding_models table exists, so always from these settings).
     # Must match the model that
     # embedded the chunks: e.g. local BAAI/bge-base-en-v1.5 (query prefix
-    # "Represent this sentence for searching relevant passages: ") or Vertex
-    # text-embedding-004 (provider "vertex", no prefix).
+    # "Represent this sentence for searching relevant passages: ").
     embedding_model: str | None = None
-    embedding_provider: str = (
-        "vertex"  # vertex (google-genai) | local (optional sentence-transformers)
-    )
+    embedding_provider: str = "local"  # optional sentence-transformers
     embedding_dimensions: int = 768
-    gcp_project: str | None = None
-    gcp_location: str = "us-central1"
     normalize_embeddings: bool = True
     query_prefix: str = ""
 
@@ -85,11 +80,9 @@ class RetrievalSettings:
     prf_expansion_weight: float = 0.3
     doc_decay: float = 0.85
 
-    # Reranker for the merged candidates: "none" (rank fusion, default), "vertex"
-    # (Vertex AI Ranking API) or "cross-encoder" (local; needs sentence-transformers).
+    # Reranker for the merged candidates: "none" or local "cross-encoder".
     reranker: str = "none"
     reranker_model: str | None = None  # provider default if unset
-    reranker_location: str = "global"  # Vertex Ranking API location
     reranker_max_length: int = 256  # cross-encoder only
 
     top_k: int = 8  # chunks returned
@@ -119,10 +112,6 @@ class RetrievalSettings:
             ),
             embedding_dimensions=_env_int(
                 "RETRIEVAL_EMBEDDING_DIMENSIONS", defaults.embedding_dimensions
-            ),
-            gcp_project=_env_str("GCP_PROJECT") or _env_str("GOOGLE_CLOUD_PROJECT"),
-            gcp_location=(
-                _env_str("GCP_LOCATION") or _env_str("GOOGLE_CLOUD_LOCATION", defaults.gcp_location)
             ),
             normalize_embeddings=_env_bool(
                 "RETRIEVAL_NORMALIZE_EMBEDDINGS", defaults.normalize_embeddings
@@ -167,7 +156,6 @@ class RetrievalSettings:
             doc_decay=_env_float("RETRIEVAL_DOC_DECAY", defaults.doc_decay),
             reranker=_env_str("RETRIEVAL_RERANKER", defaults.reranker),
             reranker_model=_env_str("RETRIEVAL_RERANKER_MODEL"),
-            reranker_location=_env_str("RETRIEVAL_RERANKER_LOCATION", defaults.reranker_location),
             reranker_max_length=_env_int(
                 "RETRIEVAL_RERANKER_MAX_LENGTH", defaults.reranker_max_length
             ),

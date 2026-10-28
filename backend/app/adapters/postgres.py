@@ -15,7 +15,6 @@ from app.models import (
 )
 from app.ports import (
     DependencyUnavailable,
-    QueryEmbeddingPort,
     RetrievalPort,
     SourceRecordPort,
     UnsupportedQueryFilter,
@@ -23,11 +22,10 @@ from app.ports import (
 
 
 class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
-    """Search live ``chunks`` and verify citations against stored source records."""
+    """AlloyDB native BM25 search over ``chunks.content`` and citation verification."""
 
-    def __init__(self, engine: AsyncEngine, embedder: QueryEmbeddingPort) -> None:
+    def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
-        self._embedder = embedder
 
     async def healthcheck(self) -> bool:
         try:
@@ -43,25 +41,15 @@ class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
             # The live schema has case_number and citation_text, but no trusted
             # case_name field. Do not silently ignore this filter.
             raise UnsupportedQueryFilter("case_name")
-        try:
-            query_embedding = await self._embedder.embed_query(question)
-        except Exception as exc:
-            raise DependencyUnavailable("Query embedding service failed.") from exc
-        if len(query_embedding) != 768:
-            raise ValueError("Query embedding dimension does not match the configured index.")
         query = text(
             """
-            WITH terms AS (SELECT websearch_to_tsquery('english', :question) AS query)
-            , semantic AS (
+            WITH ranked AS (
                 SELECT c.chunk_uuid AS chunk_id,
-                       row_number() OVER (
-                           ORDER BY c.embedding <=> CAST(:query_embedding AS vector)
-                       ) AS rank
+                       c.content <@> :question AS bm25_score
                 FROM chunks AS c
                 JOIN judgments AS j ON j.judgment_uuid = c.judgment_uuid
                 JOIN source_files AS sf ON sf.source_file_uuid = c.source_file_uuid
-                WHERE c.embedding IS NOT NULL
-                  AND c.is_active
+                WHERE c.is_active
                   AND sf.is_current
                   AND sf.judgment_uuid = c.judgment_uuid
                   AND c.page_start IS NOT NULL
@@ -70,57 +58,28 @@ class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
                   AND (:date_to IS NULL OR j.judgment_date <= :date_to)
                   AND (cardinality(CAST(:document_ids AS uuid[])) = 0
                        OR j.judgment_uuid = ANY(CAST(:document_ids AS uuid[])))
-                ORDER BY c.embedding <=> CAST(:query_embedding AS vector)
+                ORDER BY c.content <@> :question ASC, c.chunk_uuid
                 LIMIT :candidate_limit
-            ), lexical AS (
-                SELECT c.chunk_uuid AS chunk_id,
-                       row_number() OVER (
-                           ORDER BY ts_rank_cd(c.search_vector, terms.query) DESC, c.chunk_uuid
-                       ) AS rank
-                FROM chunks AS c
-                JOIN judgments AS j ON j.judgment_uuid = c.judgment_uuid
-                JOIN source_files AS sf ON sf.source_file_uuid = c.source_file_uuid
-                CROSS JOIN terms
-                WHERE c.search_vector @@ terms.query
-                  AND c.is_active
-                  AND sf.is_current
-                  AND sf.judgment_uuid = c.judgment_uuid
-                  AND c.page_start IS NOT NULL
-                  AND c.page_end IS NOT NULL
-                  AND (:date_from IS NULL OR j.judgment_date >= :date_from)
-                  AND (:date_to IS NULL OR j.judgment_date <= :date_to)
-                  AND (cardinality(CAST(:document_ids AS uuid[])) = 0
-                       OR j.judgment_uuid = ANY(CAST(:document_ids AS uuid[])))
-                ORDER BY ts_rank_cd(c.search_vector, terms.query) DESC, c.chunk_uuid
-                LIMIT :candidate_limit
-            ), fused AS (
-                SELECT chunk_id, sum(1.0 / (60 + rank)) AS score
-                FROM (
-                    SELECT chunk_id, rank FROM semantic
-                    UNION ALL
-                    SELECT chunk_id, rank FROM lexical
-                ) AS candidate_ranks
-                GROUP BY chunk_id
             )
             SELECT c.chunk_uuid::text AS chunk_id,
                    c.judgment_uuid::text AS document_id,
                    c.source_file_uuid::text AS source_pdf_id,
                    c.content AS text,
                    array_agg(sp.page_number ORDER BY sp.page_number) AS pages,
-                   fused.score::float8 AS score
+                   -ranked.bm25_score::float8 AS score
             FROM chunks AS c
             JOIN judgments AS j ON j.judgment_uuid = c.judgment_uuid
             JOIN source_files AS sf ON sf.source_file_uuid = c.source_file_uuid
             JOIN source_pages AS sp
               ON sp.source_file_uuid = c.source_file_uuid
              AND sp.page_number BETWEEN c.page_start AND c.page_end
-            JOIN fused ON fused.chunk_id = c.chunk_uuid
+            JOIN ranked ON ranked.chunk_id = c.chunk_uuid
             WHERE c.is_active
               AND sf.is_current
               AND sf.judgment_uuid = c.judgment_uuid
             GROUP BY c.chunk_uuid, c.judgment_uuid, c.source_file_uuid, c.content,
-                     fused.score
-            ORDER BY fused.score DESC, c.chunk_uuid
+                     ranked.bm25_score
+            ORDER BY ranked.bm25_score ASC, c.chunk_uuid
             LIMIT :limit
             """
         )
@@ -136,7 +95,6 @@ class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
                             query,
                             {
                                 "question": question,
-                                "query_embedding": "[" + ",".join(map(str, query_embedding)) + "]",
                                 "date_from": filters.date_from,
                                 "date_to": filters.date_to,
                                 "document_ids": document_ids,

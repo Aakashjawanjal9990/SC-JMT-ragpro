@@ -130,8 +130,6 @@ class HybridRetriever:
         embedding_options = dict(
             normalize=settings.normalize_embeddings,
             query_prefix=settings.query_prefix,
-            project=settings.gcp_project,
-            location=settings.gcp_location,
         )
         if settings.vector_store == "pgvector":
             if not settings.embedding_model:
@@ -215,8 +213,6 @@ class HybridRetriever:
                 settings.reranker,
                 model_name=settings.reranker_model,
                 max_length=settings.reranker_max_length,
-                project=settings.gcp_project,
-                location=settings.reranker_location,
             ),
             bm25,
             top_k=settings.top_k,

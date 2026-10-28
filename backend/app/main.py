@@ -17,7 +17,6 @@ from app.adapters.local_test import LocalTestAnswerGeneration
 from app.adapters.postgres import PostgresQueryAdapter
 from app.adapters.pratik_generation import PratikAnswerGenerationAdapter
 from app.adapters.sqlite_sources import SqliteSourceRecordAdapter
-from app.adapters.vertex import VertexAIAdapter
 from app.api.compat import router as compat_router
 from app.api.errors import register_error_handlers
 from app.api.routes import router
@@ -115,24 +114,9 @@ def create_app(
         if resolved_settings.database_url
         else None
     )
-    vertex_adapter = (
-        VertexAIAdapter(resolved_settings)
-        if all(
-            (
-                resolved_settings.google_cloud_project,
-                resolved_settings.google_cloud_location,
-                resolved_settings.vertex_model_id,
-                resolved_settings.vertex_embedding_model_id,
-            )
-        )
-        else None
-    )
     postgres_adapter = (
-        PostgresQueryAdapter(
-            database_engine,
-            vertex_adapter,
-        )
-        if database_engine and vertex_adapter and resolved_settings.vertex_embedding_model_id
+        PostgresQueryAdapter(database_engine)
+        if database_engine
         else None
     )
     retrieval_settings = RetrievalSettings.from_environment()
@@ -160,11 +144,9 @@ def create_app(
             )
             else (
                 PratikAnswerGenerationAdapter(resolved_settings)
-                if resolved_settings.answer_generation_provider == "groq"
-                else vertex_adapter
+                if resolved_settings.groq_api_key
+                else UnconfiguredAnswerGeneration()
             )
-            if (resolved_settings.answer_generation_provider == "groq" or vertex_adapter)
-            else UnconfiguredAnswerGeneration()
         )
     )
 
@@ -290,8 +272,6 @@ def create_app(
                 await redis_client.aclose()
             if database_engine is not None:
                 await database_engine.dispose()
-            if vertex_adapter is not None:
-                await vertex_adapter.close()
             if isinstance(answer_generation_adapter, PratikAnswerGenerationAdapter):
                 await answer_generation_adapter.close()
 

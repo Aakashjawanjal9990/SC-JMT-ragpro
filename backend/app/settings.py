@@ -28,11 +28,6 @@ class Settings:
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None
-    google_cloud_project: str | None = None
-    google_cloud_location: str | None = None
-    vertex_model_id: str | None = None
-    vertex_embedding_model_id: str | None = None
-    answer_generation_provider: str = "vertex"
     groq_api_key: str | None = None
     groq_model_id: str = "openai/gpt-oss-120b"
     groq_generation_reasoning_effort: str = "medium"
@@ -171,13 +166,6 @@ class Settings:
         oidc_issuer = os.getenv("OIDC_ISSUER") or None
         oidc_audience = os.getenv("OIDC_AUDIENCE") or None
         oidc_jwks_url = os.getenv("OIDC_JWKS_URL") or None
-        google_cloud_project = os.getenv("GOOGLE_CLOUD_PROJECT") or None
-        google_cloud_location = os.getenv("GOOGLE_CLOUD_LOCATION") or None
-        vertex_model_id = os.getenv("VERTEX_MODEL_ID") or None
-        vertex_embedding_model_id = os.getenv("VERTEX_EMBEDDING_MODEL_ID") or None
-        answer_generation_provider = (
-            os.getenv("ANSWER_GENERATION_PROVIDER", "vertex").strip().lower()
-        )
         groq_api_key = os.getenv("GROQ_API_KEY") or None
         groq_model_id = os.getenv("GROQ_MODEL_ID", "openai/gpt-oss-120b").strip()
         groq_generation_reasoning_effort = os.getenv(
@@ -192,10 +180,6 @@ class Settings:
             groq_max_context_chars = int(os.getenv("GROQ_MAX_CONTEXT_CHARS", "48000"))
         except ValueError as exc:
             raise ValueError("Groq generation limits must be numeric.") from exc
-        if answer_generation_provider not in {"vertex", "groq"}:
-            raise ValueError("ANSWER_GENERATION_PROVIDER must be 'vertex' or 'groq'.")
-        if answer_generation_provider == "groq" and not groq_api_key:
-            raise ValueError("GROQ_API_KEY is required when ANSWER_GENERATION_PROVIDER=groq.")
         if not groq_model_id or len(groq_model_id) > 128:
             raise ValueError("GROQ_MODEL_ID must contain between 1 and 128 characters.")
         if environment.lower() in {"prod", "production"}:
@@ -205,10 +189,7 @@ class Settings:
                 "AUTH_CHALLENGE_SECRET": auth_challenge_secret,
                 "SMTP_HOST": smtp_host,
                 "SMTP_FROM_EMAIL": smtp_from_email,
-                "GOOGLE_CLOUD_PROJECT": google_cloud_project,
-                "GOOGLE_CLOUD_LOCATION": google_cloud_location,
-                "VERTEX_MODEL_ID": vertex_model_id,
-                "VERTEX_EMBEDDING_MODEL_ID": vertex_embedding_model_id,
+                "GROQ_API_KEY": groq_api_key,
                 "CORS_ORIGINS": origins,
             }
             missing = [name for name, value in required.items() if not value]
@@ -257,11 +238,6 @@ class Settings:
             oidc_issuer=oidc_issuer,
             oidc_audience=oidc_audience,
             oidc_jwks_url=oidc_jwks_url,
-            google_cloud_project=google_cloud_project,
-            google_cloud_location=google_cloud_location,
-            vertex_model_id=vertex_model_id,
-            vertex_embedding_model_id=vertex_embedding_model_id,
-            answer_generation_provider=answer_generation_provider,
             groq_api_key=groq_api_key,
             groq_model_id=groq_model_id,
             groq_generation_reasoning_effort=groq_generation_reasoning_effort or "medium",

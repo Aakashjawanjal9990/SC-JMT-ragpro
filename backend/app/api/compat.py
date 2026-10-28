@@ -639,7 +639,7 @@ async def _persist_failed_chat_attempt(
                         }
                     ),
                     "latency": elapsed,
-                    "model": request.app.state.settings.vertex_model_id or "configured-model",
+                    "model": request.app.state.settings.groq_model_id,
                 },
             )
     except SQLAlchemyError:
@@ -718,7 +718,7 @@ async def _persist_chat_turn(
                 "metadata": json.dumps({"conversation_id": str(conversation_id)}),
                 "status": "COMPLETED",
                 "latency": elapsed,
-                "model": request.app.state.settings.vertex_model_id or "configured-model",
+                "model": request.app.state.settings.groq_model_id,
             },
         )
 

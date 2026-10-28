@@ -36,10 +36,6 @@ class AnswerGenerationPort(Protocol):
     ) -> GeneratedAnswer: ...
 
 
-class QueryEmbeddingPort(Protocol):
-    async def embed_query(self, question: str) -> Sequence[float]: ...
-
-
 class AdapterNotConfigured(RuntimeError):
     """Raised until the owning module's adapter is wired into the application."""
 

@@ -4,7 +4,7 @@ The backend now provides compatibility routes for Tanvi's current frontend and k
 
 ## Local setup
 
-1. Copy `backend/.env.example` to `backend/.env` and set the Google Cloud project, Vertex models, and local database credentials as needed.
+1. Copy `backend/.env.example` to `backend/.env`, set `GROQ_API_KEY`, and configure local database credentials as needed.
 2. Start the backend services with `docker compose up --build` from `backend/`.
 3. The API listens on `http://localhost:8080`; set the frontend `VITE_API_URL` to `http://localhost:8080/api`.
 4. Mailpit's inbox is at `http://localhost:8025`. Verification and password-reset messages are captured there during local development.
@@ -31,27 +31,23 @@ Successful logins, logouts, registrations, email verification, password resets, 
 
 ## Query behavior and current data readiness
 
-Chat uses the existing query orchestrator and verified citations. The frontend receives source objects with case/title, year, page(s), citation, excerpt, and judgment ID. The database adapter reads the live Cloud SQL layout (`chunks.embedding vector(768)`, `chunks.search_vector`, `judgments`, and `source_files`). Case-name filtering is rejected because the live schema does not expose a trusted case-name field.
+Chat uses the existing query orchestrator and verified citations. The frontend receives source objects with case/title, year, page(s), citation, excerpt, and judgment ID. The database adapter uses AlloyDB's native BM25 operator and `idx_chunks_bm25` on `chunks.content`, then verifies passages against `judgments`, `source_files`, and `source_pages`. Case-name filtering is rejected because the schema does not expose a trusted case-name field.
 
-The Cloud SQL checks shared so far showed zero rows in `chunks` with embeddings. The API can be connected end to end, but it will return an insufficient-evidence response until ingestion populates chunks and vectors.
+The API can be connected end to end, but it will return an insufficient-evidence response until ingestion populates searchable chunks and source-page records.
 
 ## Retrieval adapter integration status
 
-The `retrieval` branch's `app/retrieval` package is wired behind the backend `RetrievalPort`. It supports PostgreSQL/pgvector and the ingestion team's read-only SQLite export. For local E2E, set `RETRIEVAL_VECTOR_STORE=sqlite`, point `RETRIEVAL_SQLITE_PATH` to the mounted `scj_rag_v2.db`, and enable `RETRIEVAL_PORT_ADAPTER_ENABLED=true`. The same SQLite file is used for source-record verification, so returned chunks, judgment identity, and original pages are validated against ingestion output. `RETRIEVAL_BM25_BACKEND=memory` builds a local lexical index at startup; this can use substantial memory for the full corpus.
-
-For PostgreSQL/pgvector, set `RETRIEVAL_EMBEDDING_MODEL` to the active database model ID and configure `RETRIEVAL_EMBEDDING_PROVIDER` as `vertex` or `local` to match the exact indexing model. The startup check compares the configured model ID to the one active database row and checks that vectors exist. The default backend Vertex + Cloud SQL adapter remains the fallback if the optional adapter is disabled or cannot start. `RETRIEVAL_EMBEDDING_PROVIDER=test` is a local wiring-test option only; its hash vectors are not semantic embeddings and must not be used to evaluate retrieval quality.
-
-The latest shared Cloud SQL check showed no active model row and zero embedded chunks. Use the local ingestion export for an E2E query until the production corpus and embedding model are confirmed. See `README.md` for the local setup sequence.
+The default backend path performs AlloyDB native BM25 retrieval from `chunks.content` and passes verified source passages to Groq. It does not require query embeddings, an embedding model row, a separate reranker, or the separate BM25 builder. Keep `RETRIEVAL_PORT_ADAPTER_ENABLED=false` for this path.
 
 ## Deployment configuration
 
-Production requires `DATABASE_URL`, `REDIS_URL`, `AUTH_CHALLENGE_SECRET` (at least 32 bytes), SMTP host/from address, Vertex settings, and HTTPS `CORS_ORIGINS`. Supply passwords and the challenge secret through Secret Manager. Use the Cloud Run runtime identity and Cloud SQL connector/authorized connectivity for the database URL. Configure CORS to the exact frontend origin; credentialed CORS is enabled, so wildcard origins are not allowed. The Cloud Build deployment uses `SameSite=None` for separate frontend/API sites and `Secure`; if hosting changes to a same-site origin, review this setting. Local HTTP development uses `SameSite=Lax`.
+Production requires `DATABASE_URL` pointing to AlloyDB, `REDIS_URL`, `AUTH_CHALLENGE_SECRET` (at least 32 bytes), `GROQ_API_KEY`, SMTP host/from address, and HTTPS `CORS_ORIGINS`. Supply passwords, the Groq key, and the challenge secret through Secret Manager. Configure Cloud Run networking to reach AlloyDB securely. Configure CORS to the exact frontend origin; credentialed CORS is enabled, so wildcard origins are not allowed. The Cloud Build deployment uses `SameSite=None` for separate frontend/API sites and `Secure`; if hosting changes to a same-site origin, review this setting. Local HTTP development uses `SameSite=Lax`.
 
 ## Known integration blockers
 
-- The Alembic baseline and SQL snapshot now reflect the schema-only export from the live Cloud SQL database (`chunks`, `judgments`, `source_files`, auth/history tables and indexes). The auth/history columns and constraints shared in Cloud SQL Studio match the compatibility API's assumptions.
-- The export contains no `alembic_version` table. Do not run `alembic upgrade head` against the existing Cloud SQL database: it would try to create tables that already exist. After reviewing the checked-in snapshot against the current live schema, stamp the existing database at `0001_live_schema_baseline` once. The Cloud Build pipeline intentionally does not run migrations until that bootstrap is completed.
-- The retrieval adapter now uses the live `judgments.judgment_date` column and `source_pages.page_number` records. This code change has not yet been tested against Cloud SQL.
+- The supplied AlloyDB schema dump contains the source and auth/history tables expected by the API, plus the BM25 index on `chunks.content`.
+- Do not run `alembic upgrade head` against the existing AlloyDB database; migrations would attempt to create tables already present. Cloud Build intentionally does not run migrations.
+- The BM25 query change must be exercised against the reachable AlloyDB instance before release.
 - Email verification/reset needs a real SMTP provider in production. Mailpit is for local development only.
 - `POST /api/chat/interpret` uses basic local normalization and keyword extraction; no separate intent model is wired yet.
 - A first administrator account must be provisioned by an authorized database operator; public registration always creates the `user` role.
