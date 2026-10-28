@@ -22,6 +22,9 @@ export default function AppShell({
   className = '',
   crumb,
   conversations = [],
+  conversationsStatus = 'ready',
+  conversationsError = '',
+  onRetryConversations,
   activeId = null,
   onNew,
   onSelect,
@@ -41,7 +44,9 @@ export default function AppShell({
   const matches = conversations.filter((c) =>
     (c.title || '').toLowerCase().includes(query.toLowerCase()),
   );
+
   const pinnedList = matches.filter((c) => prefs.pinned.includes(String(c.id)));
+
   const recentList = matches.filter(
     (c) => !prefs.pinned.includes(String(c.id)),
   );
@@ -49,14 +54,17 @@ export default function AppShell({
   const share = async () => {
     try {
       if (navigator.share) {
-        await navigator.share({ title: 'Nyaya-Mitra', url: location.href });
+        await navigator.share({
+          title: 'Nyaya-Mitra',
+          url: location.href,
+        });
       } else {
         await navigator.clipboard.writeText(location.href);
         setCopied(true);
         setTimeout(() => setCopied(false), 1800);
       }
     } catch {
-      /* user dismissed the share sheet */
+      // The user may dismiss the share sheet.
     }
   };
 
@@ -76,6 +84,7 @@ export default function AppShell({
   const renderRow = (c) => {
     const isPinned = prefs.pinned.includes(String(c.id));
     const isActive = String(c.id) === String(activeId);
+
     return (
       <div key={c.id} className={`sidebar-row ${isActive ? 'active' : ''}`}>
         <button
@@ -88,6 +97,7 @@ export default function AppShell({
           <MessageSquare size={14} />
           <span className="trunc">{c.title || 'Untitled research'}</span>
         </button>
+
         <button
           className="row-action"
           aria-label={isPinned ? 'Unpin research' : 'Pin research'}
@@ -96,6 +106,7 @@ export default function AppShell({
         >
           {isPinned ? <PinOff size={13} /> : <Pin size={13} />}
         </button>
+
         <button
           className="row-action"
           aria-label="Archive research"
@@ -125,15 +136,18 @@ export default function AppShell({
         <span className="crumb">
           Supreme Court research / <b>{crumb}</b>
         </span>
+
         <div className="row">
           <button className="ghost" onClick={share}>
             {copied ? <Check size={15} /> : <Share2 size={15} />}
-            {copied ? 'Link copied' : 'Share'}
+            {copied ? 'Page link copied' : 'Share page'}
           </button>
+
           <div className="userchip" title={user.email}>
             <span className="avatar">{displayName(user)[0].toUpperCase()}</span>
             <span className="uname">{displayName(user)}</span>
           </div>
+
           <button className="ghost" onClick={signOut}>
             <LogOut size={15} />
             Logout
@@ -142,6 +156,7 @@ export default function AppShell({
       </header>
 
       {open && <div className="scrim" onClick={() => setOpen(false)} />}
+
       <aside className={`sidebar ${open ? 'open' : ''}`}>
         <button
           className="newbtn"
@@ -152,6 +167,7 @@ export default function AppShell({
         >
           <Plus size={16} /> New Research
         </button>
+
         {searching ? (
           <input
             className="sidesearch-input"
@@ -167,7 +183,7 @@ export default function AppShell({
           </button>
         )}
 
-        {pinnedList.length > 0 && (
+        {conversationsStatus === 'ready' && pinnedList.length > 0 && (
           <>
             <h4>PINNED</h4>
             {pinnedList.map(renderRow)}
@@ -175,14 +191,31 @@ export default function AppShell({
         )}
 
         <h4>YOUR RESEARCH</h4>
-        {matches.length === 0 && (
+
+        {conversationsStatus === 'loading' && (
+          <p className="sidehint" aria-live="polite">
+            Loading research…
+          </p>
+        )}
+
+        {conversationsStatus === 'error' && (
+          <div className="sidehint" role="alert">
+            <p>{conversationsError || 'Could not load your research.'}</p>
+            <button className="linkbtn" onClick={onRetryConversations}>
+              Try again
+            </button>
+          </div>
+        )}
+
+        {conversationsStatus === 'ready' && matches.length === 0 && (
           <p className="sidehint">
             {conversations.length
               ? 'No matching research.'
               : 'Start a conversation and revisit your research here.'}
           </p>
         )}
-        {recentList.map(renderRow)}
+
+        {conversationsStatus === 'ready' && recentList.map(renderRow)}
 
         <div className="sidefoot">
           <button

@@ -13,27 +13,38 @@ import {
   validatePassword,
 } from '../lib/validators';
 
-/** Request a reset code, then set a new password. The backend does both. */
 export default function ForgotPassword() {
-  const [step, setStep] = useState('request'); // request | reset | done
+  const [step, setStep] = useState('request');
   const [email, setEmail] = useState('');
   const [target, setTarget] = useState('');
-  const [form, setForm] = useState({ code: '', password: '', confirm: '' });
+  const [form, setForm] = useState({
+    code: '',
+    password: '',
+    confirm: '',
+  });
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [resendBusy, setResendBusy] = useState(false);
+  const [resendNotice, setResendNotice] = useState('');
   const [left, restart] = useCountdown(30);
 
   const requestCode = async (e) => {
     e.preventDefault();
     setFormError('');
+
     const emailError = validateEmail(email);
     setErrors({ email: emailError });
-    if (emailError) return;
+
+    if (emailError || busy) return;
+
     setBusy(true);
+
     try {
       const normalised = email.trim().toLowerCase();
+
       await api.forgot(normalised);
+
       setTarget(normalised);
       restart();
       setStep('reset');
@@ -47,22 +58,33 @@ export default function ForgotPassword() {
   const resetPassword = async (e) => {
     e.preventDefault();
     setFormError('');
+
+    if (busy) return;
+
     const next = {};
     const codeError = validateCode(form.code);
     const passError = validatePassword(form.password);
+
     if (codeError) next.code = codeError;
     if (passError) next.password = passError;
-    if (form.confirm !== form.password)
+
+    if (form.confirm !== form.password) {
       next.confirm = 'Passwords do not match.';
+    }
+
     setErrors(next);
+
     if (Object.keys(next).length) return;
+
     setBusy(true);
+
     try {
       await api.reset({
         email: target,
         code: form.code,
         password: form.password,
       });
+
       setStep('done');
     } catch (err) {
       setFormError(err.message);
@@ -73,7 +95,31 @@ export default function ForgotPassword() {
 
   const set = (key) => (e) => {
     setForm({ ...form, [key]: e.target.value });
-    if (errors[key]) setErrors({ ...errors, [key]: '' });
+
+    if (errors[key]) {
+      setErrors({ ...errors, [key]: '' });
+    }
+  };
+
+  const resendCode = async () => {
+    if (resendBusy || left > 0) return;
+
+    setResendBusy(true);
+    setFormError('');
+    setResendNotice('');
+
+    try {
+      await api.forgot(target);
+
+      restart();
+      setResendNotice(
+        'If the address is eligible, a reset code has been sent.',
+      );
+    } catch (err) {
+      setFormError(err.message);
+    } finally {
+      setResendBusy(false);
+    }
   };
 
   if (step === 'done') {
@@ -107,12 +153,10 @@ export default function ForgotPassword() {
             <button
               type="button"
               className="linkbtn"
-              onClick={() => {
-                restart();
-                api.forgot(target).catch((err) => setFormError(err.message));
-              }}
+              disabled={resendBusy}
+              onClick={resendCode}
             >
-              Resend code
+              {resendBusy ? 'Sending…' : 'Resend code'}
             </button>
           )
         }
@@ -122,6 +166,7 @@ export default function ForgotPassword() {
           onChange={(code) => setForm({ ...form, code })}
           error={errors.code}
         />
+
         <TextField
           label="New password"
           type="password"
@@ -131,6 +176,7 @@ export default function ForgotPassword() {
           error={errors.password}
           hint="Use at least 8 characters with a letter and a number."
         />
+
         <TextField
           label="Confirm new password"
           type="password"
@@ -139,11 +185,19 @@ export default function ForgotPassword() {
           onChange={set('confirm')}
           error={errors.confirm}
         />
+
         {formError && (
           <div className="error" role="alert">
             {formError}
           </div>
         )}
+
+        {resendNotice && (
+          <p className="muted" role="status">
+            {resendNotice}
+          </p>
+        )}
+
         <PrimaryButton type="submit" loading={busy} disabled={busy}>
           Update password
         </PrimaryButton>
@@ -170,11 +224,13 @@ export default function ForgotPassword() {
         }}
         error={errors.email}
       />
+
       {formError && (
         <div className="error" role="alert">
           {formError}
         </div>
       )}
+
       <PrimaryButton type="submit" loading={busy} disabled={busy}>
         Send reset code
       </PrimaryButton>
