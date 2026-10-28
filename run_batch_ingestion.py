@@ -23,7 +23,7 @@ from config import config, resolve_database_url
 from storage.init_db import init_database
 from pipeline import IngestionPipeline
 from storage.gcs_loader import GCSDataLoader
-from audit_quality import QualityAuditor, run_quality_audit
+from audit_quality import run_quality_audit
 
 
 def worker_process_pdf(args):

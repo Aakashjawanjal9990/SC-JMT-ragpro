@@ -3,7 +3,7 @@ Domain Models for Supreme Court Judgment RAG Pipeline (PCE v2.0)
 Conforms strictly to db/schema.sql (Rule R1) and single-page invariant (Rule R2).
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 from dataclasses import dataclass, field
 
 

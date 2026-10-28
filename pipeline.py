@@ -6,10 +6,9 @@ Scales across 43,000+ Supreme Court judgments (1950 historical scans & 2026 digi
 import os
 import sys
 import json
-import time
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Optional
 
 import fitz  # PyMuPDF
 
@@ -32,6 +31,7 @@ from storage.stage_tracker import DocumentStageTracker, export_verification_csv
 from storage.gcs_loader import GCSDataLoader
 from local_ocr.router import LocalOCRRouter, PageRoutingDecision
 from local_ocr.engine import LocalOCREngine
+from local_ocr.layout_recovery import purge_ocr_running_headers
 
 
 class IngestionPipeline:
@@ -151,11 +151,31 @@ class IngestionPipeline:
                     document_id=doc_id
                 )
 
-                if routing_res.decision in (PageRoutingDecision.USE_PADDLE_OCR, PageRoutingDecision.USE_PP_STRUCTURE, PageRoutingDecision.FLAG_FOR_REVIEW):
+                if routing_res.decision == PageRoutingDecision.USE_PP_STRUCTURE:
+                    try:
+                        struct_res = self.engine.structure_page(page_obj, page_number=pno, allow_mock=config.allow_mock_embeddings)
+                        raw_text = (struct_res.markdown_text or "").strip() if struct_res else ""
+                        if raw_text:
+                            cleaned = purge_ocr_running_headers(raw_text, is_first_page=(pno == 1))
+                            pz.cleaned_text = CoordinateZoneExtractor.heal_ocr_degradations(cleaned)
+                            pz.extraction_method = "pp_structure"
+                            pz.ocr_quality = 0.90
+                        elif struct_res and struct_res.error:
+                            logger.warning(f"PP-Structure warning on {doc_id} p.{pno}: {struct_res.error}")
+                            pz.extraction_method = "ocr_failed"
+                            pz.ocr_quality = 0.0
+                    except Exception as e:
+                        logger.error(f"PP-Structure invocation failure on {doc_id} p.{pno}: {e}")
+                        pz.extraction_method = "ocr_failed"
+                        pz.ocr_quality = 0.0
+
+                elif routing_res.decision in (PageRoutingDecision.USE_PADDLE_OCR, PageRoutingDecision.FLAG_FOR_REVIEW):
                     try:
                         ocr_res = self.engine.ocr_page(page_obj, page_number=pno, allow_mock=config.allow_mock_embeddings)
-                        if ocr_res and ocr_res.text.strip():
-                            pz.cleaned_text = ocr_res.text.strip()
+                        raw_text = (ocr_res.text or "").strip() if ocr_res else ""
+                        if raw_text:
+                            cleaned = purge_ocr_running_headers(raw_text, is_first_page=(pno == 1))
+                            pz.cleaned_text = CoordinateZoneExtractor.heal_ocr_degradations(cleaned)
                             pz.extraction_method = "paddle_ocr"
                             pz.ocr_quality = max(0.70, getattr(ocr_res, "average_confidence", 0.85))
                         elif ocr_res and ocr_res.error:
@@ -166,10 +186,12 @@ class IngestionPipeline:
                         logger.error(f"OCR invocation failure on {doc_id} p.{pno}: {e}")
                         pz.extraction_method = "ocr_failed"
                         pz.ocr_quality = 0.0
+
                 elif routing_res.decision == PageRoutingDecision.SKIP_BLANK:
                     pz.extraction_method = "verified_blank"
                     pz.ocr_quality = 1.0
                     pz.cleaned_text = ""
+
                 elif routing_res.decision == PageRoutingDecision.SKIP_NATIVE_OK:
                     if not pz.cleaned_text.strip() and routing_res.reasons and "rescued_raw_text" in routing_res.reasons[0]:
                         pz.cleaned_text = (page_obj.get_text("text") or "").strip()
@@ -179,11 +201,13 @@ class IngestionPipeline:
                 if not pz.cleaned_text.strip():
                     images = page_obj.get_images() if hasattr(page_obj, "get_images") else []
                     raw_chars = len((page_obj.get_text("text") or "").strip())
-                    if images and pz.extraction_method not in ("ocr_failed", "paddle_ocr"):
+                    if images and pz.extraction_method not in ("ocr_failed", "paddle_ocr", "pp_structure"):
                         try:
                             ocr_res = self.engine.ocr_page(page_obj, page_number=pno, allow_mock=config.allow_mock_embeddings)
-                            if ocr_res and ocr_res.text.strip():
-                                pz.cleaned_text = ocr_res.text.strip()
+                            raw_text = (ocr_res.text or "").strip() if ocr_res else ""
+                            if raw_text:
+                                cleaned = purge_ocr_running_headers(raw_text, is_first_page=(pno == 1))
+                                pz.cleaned_text = CoordinateZoneExtractor.heal_ocr_degradations(cleaned)
                                 pz.extraction_method = "paddle_ocr"
                                 pz.ocr_quality = max(0.70, getattr(ocr_res, "average_confidence", 0.85))
                             else:
