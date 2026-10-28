@@ -197,3 +197,4 @@ python -m pytest local_ocr/tests/test_local_conditional_ocr.py -v
 git status -s
 ```
 *(Strictly ensures zero SQLite `.db` binaries, zero PDFs, and zero `.env` secrets are staged).*
+

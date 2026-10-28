@@ -19,7 +19,8 @@ python-dotenv==1.0.1
 
 # Database & Vectors
 SQLAlchemy==2.0.55
-psycopg2-binary==2.9.9
+psycopg2-binary>=2.9.9
+pgvector>=0.2.4
 
 # Google Cloud Platform (GCP)
 google-cloud-storage>=2.14.0

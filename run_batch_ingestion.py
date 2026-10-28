@@ -1,5 +1,5 @@
 """
-Batch Ingestion and Quality Gate Certification Harness (PCE v2.0)
+Batch Ingestion and Quality Certification Harness (PCE v2.0)
 Processes Supreme Court judgment PDFs (1950 historical scans & 2026 digital) into production database.
 Supports high-throughput parallel multiprocessing across 6,000+ judgments with strict quality certification.
 """
@@ -47,18 +47,33 @@ def main():
     parser.add_argument("--year", type=int, default=None, help="Target judgment year")
     parser.add_argument("--samples-per-year", type=int, default=None, help="Number of judgments to process per year")
     parser.add_argument("--limit", type=int, default=None, help="Limit total number of PDFs processed")
-    parser.add_argument("--workers", type=int, default=6, help="Number of parallel worker processes (default: 6)")
+    parser.add_argument("--workers", type=int, default=config.default_ingestion_workers, help=f"Number of parallel worker processes (default: {config.default_ingestion_workers})")
+    parser.add_argument("--target", choices=["local", "alloydb"], default=os.getenv("DATABASE_TARGET", "local"), help="Target database: 'local' (SQLite) or 'alloydb' (Google Cloud AlloyDB PostgreSQL 17)")
     parser.add_argument("--reset", action="store_true", help="Wipe database and output JSONs before ingestion")
+    parser.add_argument("--yes", "-y", action="store_true", help="Acknowledge and confirm destructive operations without interactive prompt")
     args = parser.parse_args()
 
     print("=" * 85)
-    print("=== PCE v2.0 BATCH INGESTION & QUALITY GATE CERTIFICATION ===")
+    print("=== PCE v2.0 BATCH INGESTION & DATA QUALITY CERTIFICATION ===")
     print("=" * 85)
 
     db_path = config.output_dir / "scj_rag_v2.db"
+    use_alloydb = (args.target == "alloydb" or os.getenv("DATABASE_TARGET", "").lower() in ("alloydb", "postgres", "postgresql"))
 
     if args.reset:
-        print(">> Reset flag passed: Wiping previous database and JSON directories...")
+        env_mode = os.getenv("ENVIRONMENT", "development").lower()
+        if env_mode in ("production", "prod") or use_alloydb:
+            raise RuntimeError("CRITICAL SAFETY GUARD: Destructive --reset is strictly prohibited in PRODUCTION / AlloyDB environment.")
+        if not args.yes:
+            try:
+                confirm = input("CAUTION: --reset will permanently delete the local database and output folders. Type 'YES' to proceed: ")
+                if confirm.strip() != "YES":
+                    print("Reset aborted by user.")
+                    sys.exit(0)
+            except (EOFError, KeyboardInterrupt):
+                print("\nReset aborted.")
+                sys.exit(0)
+        print(">> Reset confirmed: Wiping previous database and JSON directories...")
         for p in [db_path, db_path.with_name("scj_rag_v2.db-wal"), db_path.with_name("scj_rag_v2.db-shm")]:
             if p.exists():
                 try:
@@ -70,82 +85,76 @@ def main():
                 shutil.rmtree(folder, ignore_errors=True)
             folder.mkdir(parents=True, exist_ok=True)
 
-    print(f">> Target Database: {db_path.resolve()}")
-    init_database(db_path)
+    if use_alloydb:
+        target_db_url = os.getenv("ALLOYDB_DATABASE_URL", f"postgresql+psycopg2://postgres:root@2026@34.93.114.95:5432/scrag")
+        print(f">> Target Database: Google Cloud AlloyDB (PostgreSQL 17.10) -> 34.93.114.95:5432/scrag (BM25 + pgvector HNSW)")
+    else:
+        print(f">> Target Database: Local SQLite -> {db_path.resolve()}")
+        init_database(db_path)
+        target_db_url = f"sqlite:///{db_path.resolve().as_posix()}"
 
-    pipeline = IngestionPipeline(db_url=f"sqlite:///{db_path.resolve().as_posix()}", enable_db=True)
+    pipeline = IngestionPipeline(db_url=target_db_url, enable_db=True)
 
     target_files = []
     if args.gcs:
         target_year = args.year or 1950
-        print(f">> Streaming directly from GCS bucket: gs://{config.gcs_bucket}/ (Year: {target_year})")
-        gcs_loader = GCSDataLoader(bucket_name=config.gcs_bucket, project_id=config.gcp_project)
-        pdf_uris = gcs_loader.list_year_pdfs(year=target_year, prefix_base=config.gcs_prefix)
+        print(f">> Loading files from GCS bucket: {config.gcs_bucket}/{config.gcs_prefix}/year={target_year}/english/")
+        gcs = GCSDataLoader()
+        all_blobs = gcs.list_available_pdfs(year=target_year)
         if args.limit:
-            pdf_uris = pdf_uris[:args.limit]
-        for u in pdf_uris:
-            target_files.append((u, target_year))
+            all_blobs = all_blobs[:args.limit]
+        print(f">> Found {len(all_blobs)} PDFs in GCS.")
+        target_files = [(b, target_year) for b in all_blobs]
+    elif args.all:
+        data_root = config.data_dir
+        print(f">> Scanning local data directory across all years: {data_root.resolve()}")
+        for yr_dir in sorted(data_root.glob("year=*")):
+            try:
+                yr = int(yr_dir.name.split("=")[1])
+            except ValueError:
+                yr = 2026
+            pdf_files = list(yr_dir.glob("**/*.pdf"))
+            if args.samples_per_year:
+                pdf_files = pdf_files[:args.samples_per_year]
+            for f in pdf_files:
+                target_files.append((str(f), yr))
+            print(f"   -> Year {yr}: queued {len(pdf_files)} PDFs")
+        if args.limit:
+            target_files = target_files[:args.limit]
     else:
-        year_dirs = sorted([d for d in config.data_dir.glob("year=*") if d.is_dir()])
-        if args.year:
-            year_dirs = [d for d in year_dirs if d.name == f"year={args.year}"]
+        sample_1950 = config.fixtures_dir / "1950_1_15_25_EN.pdf"
+        sample_2026 = config.fixtures_dir / "2026_1_183_190_EN.pdf"
+        sample_p25 = config.fixtures_dir / "1950_1_25_29_EN.pdf"
 
-        if year_dirs:
-            print(f">> Scanning {len(year_dirs)} year partition directories in {config.data_dir.resolve()}...")
-            for ydir in year_dirs:
-                try:
-                    yr_val = int(ydir.name.replace("year=", ""))
-                except ValueError:
-                    yr_val = 2000
-                pdfs = sorted(list(ydir.rglob("*.pdf")))
-                if not pdfs:
-                    continue
-                if args.all:
-                    chosen = pdfs
-                elif args.samples_per_year:
-                    chosen = pdfs[:args.samples_per_year]
-                else:
-                    chosen = pdfs[:1]
+        if sample_1950.exists():
+            target_files.append((str(sample_1950), 1950))
+        if sample_2026.exists():
+            target_files.append((str(sample_2026), 2026))
+        if sample_p25.exists():
+            target_files.append((str(sample_p25), 1950))
 
-                for p in chosen:
-                    target_files.append((str(p), yr_val))
-                print(f"   * {ydir.name}: Loaded {len(chosen):,} PDF(s) (out of {len(pdfs):,} available)")
-        else:
-            # Fallback benchmark samples
-            benchmark_samples = [
-                ("year=1950/english/1950_1_15_25_EN.pdf", 1950),
-                ("year=1950/english/1950_1_25_29_EN.pdf", 1950),
-                ("year=1950/english/1950_1_869_940_EN.pdf", 1950),
-                ("year=2026/english/2026_1_183_190_EN.pdf", 2026),
-                ("year=2026/english/2026_1_191_205_EN.pdf", 2026),
-                ("year=2026/english/2026_1_119_129_EN.pdf", 2026),
-                ("year=2026/english/2026_1_130_140_EN.pdf", 2026),
-            ]
-            for rel_path, yr in benchmark_samples:
-                pdf_path = config.data_dir / rel_path
-                if not pdf_path.exists():
-                    alt_path = config.fixtures_dir / Path(rel_path).name
-                    if alt_path.exists():
-                        pdf_path = alt_path
-                    else:
-                        continue
-                target_files.append((str(pdf_path), yr))
-
-    if args.limit:
-        target_files = target_files[:args.limit]
+        if not target_files:
+            # Fallback to data directory sample
+            data_pdf = list(config.data_dir.glob("**/*.pdf"))
+            for f in data_pdf[:args.limit or 10]:
+                target_files.append((str(f), 2026))
 
     total_count = len(target_files)
-    print(f"\n>> Commencing ingestion of {total_count:,} Supreme Court judgments...")
-    print(f">> Concurrency: {args.workers} worker processes | Target DB: {db_path.name}")
+    print(f"\n>> Queued {total_count} judgment PDFs for parallel batch ingestion (Workers: {args.workers})...\n")
+
+    if total_count == 0:
+        print(">> No PDFs found to process.")
+        return
+
     t0 = time.time()
     total_saved = 0
     total_chunks = 0
-    log_interval = 25 if total_count <= 200 else 100
+    log_interval = max(1, total_count // 20)
 
-    if args.workers <= 1:
+    if args.workers <= 1 or total_count <= 2:
         for idx, (fpath, yr) in enumerate(target_files, 1):
             name = Path(fpath).name
-            rec = pipeline.process_pdf(fpath, yr, save_db=True)
+            rec = pipeline.process_pdf(fpath, year=yr, save_db=True)
             if rec:
                 total_saved += 1
                 total_chunks += len(rec.chunks)
@@ -177,19 +186,20 @@ def main():
     print(f"\n>> Ingestion finished in {elapsed:.2f}s ({elapsed/60:.2f}m)!")
     print(f">> Total judgments saved: {total_saved:,} / {total_count:,} | Total active chunks: {total_chunks:,}")
 
-    # Run Strict Quality Gates on Database
+    # Run Data Quality and Integrity Verification
     print("\n" + "=" * 85)
-    print("=== RUNNING STRICT QUALITY GATES CERTIFICATION ===")
+    print("=== RUNNING DATA QUALITY & INTEGRITY VERIFICATION ===")
     print("=" * 85)
-    gate_results = check_all_gates(chunks_dir=config.chunks_dir, db_url=f"sqlite:///{db_path.resolve().as_posix()}")
-    for gid, ginfo in gate_results["strict_gates"].items():
-        print(f"{gid:<28} | {ginfo['status']:<10} | {ginfo['detail']}")
+    gate_results = check_all_gates(chunks_dir=config.chunks_dir, db_url=target_db_url)
+    checks = gate_results.get("quality_checks", gate_results.get("strict_gates", {}))
+    for check_name, info in checks.items():
+        print(f"{check_name:<28} | {info['status']:<10} | {info['detail']}")
     print("-" * 85)
 
-    if gate_results["all_strict_passed"]:
-        print(">>> [SUCCESS] ALL STRICT QUALITY GATES MET (100% PASS). CERTIFIED FOR PRODUCTION.")
+    if gate_results.get("all_passed", gate_results.get("all_strict_passed")):
+        print(">>> [SUCCESS] ALL DATA QUALITY AND INTEGRITY CHECKS VERIFIED (100% PASS). CERTIFIED FOR PRODUCTION.")
     else:
-        print("[WARNING] Strict quality gates check incomplete.")
+        print("[WARNING] Data quality verification checks incomplete.")
     print("=" * 85)
 
 

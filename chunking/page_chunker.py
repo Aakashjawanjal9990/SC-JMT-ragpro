@@ -104,11 +104,11 @@ class PageChunker:
         min_alpha_chars: Optional[int] = None,
         max_overlap_chars: Optional[int] = None
     ):
-        self.target_chunk_chars = target_chunk_chars or getattr(config, "target_chunk_chars", 1500)
-        self.max_chunk_chars = max_chunk_chars or getattr(config, "max_chunk_chars", 2000)
-        self.min_chunk_chars = min_chunk_chars or getattr(config, "min_chunk_chars", 150)
-        self.min_alpha_chars = min_alpha_chars or getattr(config, "min_alpha_chars", 15)
-        self.max_overlap_chars = max_overlap_chars or getattr(config, "max_overlap_chars", 300)
+        self.target_chunk_chars: int = target_chunk_chars if target_chunk_chars is not None else int(getattr(config, "target_chunk_chars", 1500))
+        self.max_chunk_chars: int = max_chunk_chars if max_chunk_chars is not None else int(getattr(config, "max_chunk_chars", 2000))
+        self.min_chunk_chars: int = min_chunk_chars if min_chunk_chars is not None else int(getattr(config, "min_chunk_chars", 150))
+        self.min_alpha_chars: int = min_alpha_chars if min_alpha_chars is not None else int(getattr(config, "min_alpha_chars", 15))
+        self.max_overlap_chars: int = max_overlap_chars if max_overlap_chars is not None else int(getattr(config, "max_overlap_chars", 300))
 
     def chunk_page(
         self,
@@ -164,15 +164,15 @@ class PageChunker:
         cur_conf = 0.50
 
         for p_txt, p_sec, p_judge, p_conf in expanded_classified:
-            p_alpha = sum(1 for ch in p_txt if ch.isalpha())
+            has_words = bool(re.search(r"\b[a-zA-Z]{2,}\b", p_txt))
 
             if not cur_text:
-                if p_alpha < self.min_alpha_chars and chunk_groups:
+                if not has_words and chunk_groups:
                     prev_t, prev_s, prev_j, prev_c = chunk_groups[-1]
                     if len(prev_t) + len(p_txt) + 2 <= self.max_chunk_chars:
                         chunk_groups[-1] = (f"{prev_t}\n\n{p_txt}", prev_s, prev_j, prev_c)
                     continue
-                elif p_alpha < self.min_alpha_chars:
+                elif not has_words:
                     continue
 
                 cur_text = p_txt
@@ -186,19 +186,19 @@ class PageChunker:
                 cur_text += "\n\n" + p_txt
             else:
                 # Flush cur_text if valid
-                c_alpha = sum(1 for ch in cur_text if ch.isalpha())
-                if c_alpha >= self.min_alpha_chars:
+                c_has_words = bool(re.search(r"\b[a-zA-Z]{2,}\b", cur_text))
+                if c_has_words:
                     chunk_groups.append((cur_text, cur_sec, cur_judge, cur_conf))
                 elif chunk_groups:
                     prev_t, prev_s, prev_j, prev_c = chunk_groups[-1]
                     if len(prev_t) + len(cur_text) + 2 <= self.max_chunk_chars:
                         chunk_groups[-1] = (f"{prev_t}\n\n{cur_text}", prev_s, prev_j, prev_c)
 
-                # Overlap handling: strictly require valid sentence with >= min_alpha_chars
+                # Overlap handling: strictly require valid sentence with words
                 if cur_sec == p_sec and cur_judge == p_judge:
                     sentences = re.split(r"(?<=[.!?])\s+", cur_text)
                     last_s = sentences[-1] if len(sentences) > 1 and len(sentences[-1]) < self.max_overlap_chars else ""
-                    overlap = last_s if (last_s and sum(1 for ch in last_s if ch.isalpha()) >= self.min_alpha_chars) else ""
+                    overlap = last_s if (last_s and re.search(r"\b[a-zA-Z]{2,}\b", last_s)) else ""
                     candidate = (overlap + "\n\n" + p_txt).strip() if overlap else p_txt
                     if len(candidate) <= self.max_chunk_chars:
                         cur_text = candidate
@@ -213,18 +213,18 @@ class PageChunker:
 
         if cur_text:
             stripped_cur = cur_text.strip()
-            alpha_count = sum(1 for ch in stripped_cur if ch.isalpha())
+            cur_has_words = bool(re.search(r"\b[a-zA-Z]{2,}\b", stripped_cur))
             if chunk_groups:
                 prev_text, prev_sec, prev_judge, prev_conf = chunk_groups[-1]
-                if cur_sec == prev_sec and (len(stripped_cur) < self.min_chunk_chars or alpha_count < self.min_alpha_chars):
+                if cur_sec == prev_sec and len(stripped_cur) < self.min_chunk_chars:
                     if len(prev_text) + len(stripped_cur) + 2 <= self.max_chunk_chars:
                         chunk_groups[-1] = (prev_text + "\n\n" + stripped_cur, prev_sec, prev_judge, prev_conf)
-                    elif alpha_count >= self.min_alpha_chars:
+                    elif cur_has_words:
                         chunk_groups.append((cur_text, cur_sec, cur_judge, cur_conf))
-                elif alpha_count >= self.min_alpha_chars:
+                elif cur_has_words:
                     chunk_groups.append((cur_text, cur_sec, cur_judge, cur_conf))
             else:
-                if alpha_count >= self.min_alpha_chars:
+                if cur_has_words:
                     chunk_groups.append((cur_text, cur_sec, cur_judge, cur_conf))
 
         records = []

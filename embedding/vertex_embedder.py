@@ -5,8 +5,6 @@ Guarantees fail-closed behavior in production, strict vector dimension/finite va
 and explicit mock mode isolation.
 """
 
-import os
-import sys
 import math
 import time
 import logging

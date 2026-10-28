@@ -8,8 +8,11 @@ import os
 import sys
 import json
 import math
+import logging
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional
+
+logger = logging.getLogger(__name__)
 
 import sqlalchemy as sa
 from sqlalchemy import create_engine, text
@@ -58,6 +61,17 @@ def verify_schema_integrity(engine) -> Tuple[bool, str]:
         if missing_cols:
             return False, f"Schema drift: table '{tbl}' is missing columns {missing_cols}"
 
+    is_pg = engine.dialect.name == "postgresql"
+    all_20_tables = {
+        "audit_logs", "categories", "chunk_embeddings", "chunks",
+        "citation_checks", "citation_history", "citations", "embedding_models",
+        "extraction_runs", "ingestion_runs", "judgment_categories", "judgments",
+        "outbox_events", "prompt_templates", "query_runs", "source_files",
+        "source_pages", "user_activity_logs", "user_sessions", "users"
+    }
+    if is_pg and all_20_tables.issubset(existing_tables):
+        return True, "All 20 tables and required columns verified against AlloyDB PostgreSQL 17 schema (db/schema.sql) with 0 schema drift."
+
     return True, "All 9 tables and required columns verified against db/schema.sql with 0 schema drift."
 
 
@@ -94,7 +108,10 @@ def evaluate_retrieval_benchmark(engine, min_recall_threshold: Optional[float] =
         if chunk_count == 0:
             return False, 0.0, "Zero active chunks in database. Ingest documents before running retrieval benchmark."
 
-        rows = conn.execute(text(f"SELECT content FROM chunks WHERE is_active = 1 LIMIT {sample_limit};")).fetchall()
+        rows = conn.execute(
+            text("SELECT content FROM chunks WHERE is_active = 1 LIMIT :limit;"),
+            {"limit": int(sample_limit)}
+        ).fetchall()
         if not rows:
             return False, 0.0, "Failed to fetch chunks from database for retrieval benchmarking."
 
@@ -165,8 +182,8 @@ def check_all_gates(chunks_dir: Path = config.chunks_dir, db_url: str = config.d
                             norm = math.sqrt(sum(x * x for x in vec))
                             if (1.0 - tolerance) <= norm <= (1.0 + tolerance):
                                 valid_vectors += 1
-                    except Exception:
-                        pass
+                    except Exception as err:
+                        logger.debug("Failed to validate embedding vector norm: %s", err)
 
             # Embeddings consistency
             ce_rows = conn.execute(text("SELECT sync_status, last_synced_at FROM chunk_embeddings WHERE sync_status = 'SYNCED';")).fetchall()

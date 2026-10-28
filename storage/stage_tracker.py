@@ -3,12 +3,11 @@
 Tracks parsing -> chunking -> embedding -> vector_db stages.
 """
 
-import os
 import csv
 import json
 import time
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any, Optional
 try:
     from PCEV2.config import config
 except ImportError:
@@ -99,8 +98,8 @@ def export_verification_csv(log_payloads: Optional[Any] = None, year_filter: Opt
             try:
                 with open(jpath, "r", encoding="utf-8") as f:
                     payloads.append(json.load(f))
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError):
+                payloads.append({})
     else:
         payloads = log_payloads
 

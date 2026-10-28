@@ -3,7 +3,6 @@ Database Schema Initializer for PCE v2.0
 Initializes clean SQLite database conforming strictly to db/schema.sql with zero DDL drift.
 """
 
-import os
 import sqlite3
 from pathlib import Path
 

@@ -2,7 +2,9 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 16.15
+\restrict 99lnfCohYK2fDGPSLjsOcCoptooXi5tKy3e9LlwTSKFHGQMWPayCgm9sdkxqz7E
+
+-- Dumped from database version 17.10
 -- Dumped by pg_dump version 18.0
 
 SET statement_timeout = 0;
@@ -18,12 +20,77 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
+-- Name: public; Type: SCHEMA; Schema: -; Owner: -
+--
+
+-- *not* creating schema, since initdb creates it
+
+
+--
+-- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON SCHEMA public IS '';
+
+
+--
+-- Name: pg_textsearch; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS pg_textsearch WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION pg_textsearch; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION pg_textsearch IS 'Full-text search with BM25 ranking';
+
+
+--
+-- Name: unaccent; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION unaccent; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION unaccent IS 'text search dictionary that removes accents';
+
+
+--
+-- Name: uuid-ossp; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION "uuid-ossp"; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION "uuid-ossp" IS 'generate universally unique identifiers (UUIDs)';
+
+
+--
 -- Name: vector; Type: EXTENSION; Schema: -; Owner: -
 --
 
 CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 
+
+--
+-- Name: EXTENSION vector; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION vector IS 'vector data type and ivfflat and hnsw access methods';
+
+
 SET default_tablespace = '';
+
 SET default_table_access_method = heap;
 
 --
@@ -46,6 +113,7 @@ CREATE TABLE public.audit_logs (
     CONSTRAINT audit_logs_metadata_check CHECK (((metadata IS NULL) OR (jsonb_typeof(metadata) = 'object'::text)))
 );
 
+
 --
 -- Name: categories; Type: TABLE; Schema: public; Owner: -
 --
@@ -57,6 +125,7 @@ CREATE TABLE public.categories (
     description text,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+
 
 --
 -- Name: chunk_embeddings; Type: TABLE; Schema: public; Owner: -
@@ -77,6 +146,7 @@ CREATE TABLE public.chunk_embeddings (
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+
 
 --
 -- Name: chunks; Type: TABLE; Schema: public; Owner: -
@@ -108,6 +178,7 @@ CREATE TABLE public.chunks (
     CONSTRAINT chunks_page_start_check CHECK (((page_start IS NULL) OR (page_start > 0)))
 );
 
+
 --
 -- Name: citation_checks; Type: TABLE; Schema: public; Owner: -
 --
@@ -123,6 +194,7 @@ CREATE TABLE public.citation_checks (
     checked_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     CONSTRAINT citation_checks_verification_details_check CHECK (((verification_details IS NULL) OR (jsonb_typeof(verification_details) = 'object'::text)))
 );
+
 
 --
 -- Name: citation_history; Type: TABLE; Schema: public; Owner: -
@@ -140,6 +212,7 @@ CREATE TABLE public.citation_history (
     changed_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
+
 --
 -- Name: citations; Type: TABLE; Schema: public; Owner: -
 --
@@ -153,6 +226,7 @@ CREATE TABLE public.citations (
     source_locator text,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+
 
 --
 -- Name: embedding_models; Type: TABLE; Schema: public; Owner: -
@@ -168,6 +242,7 @@ CREATE TABLE public.embedding_models (
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     CONSTRAINT embedding_models_dimensions_check CHECK ((dimensions > 0))
 );
+
 
 --
 -- Name: extraction_runs; Type: TABLE; Schema: public; Owner: -
@@ -188,6 +263,7 @@ CREATE TABLE public.extraction_runs (
     CONSTRAINT extraction_runs_check CHECK (((retry_count >= 0) AND (max_attempts > 0) AND (retry_count <= max_attempts))),
     CONSTRAINT extraction_runs_check1 CHECK (((finished_at IS NULL) OR (started_at IS NULL) OR (finished_at >= started_at)))
 );
+
 
 --
 -- Name: ingestion_runs; Type: TABLE; Schema: public; Owner: -
@@ -211,6 +287,7 @@ CREATE TABLE public.ingestion_runs (
     CONSTRAINT ingestion_runs_check1 CHECK (((finished_at IS NULL) OR (started_at IS NULL) OR (finished_at >= started_at)))
 );
 
+
 --
 -- Name: judgment_categories; Type: TABLE; Schema: public; Owner: -
 --
@@ -223,6 +300,7 @@ CREATE TABLE public.judgment_categories (
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     CONSTRAINT judgment_categories_confidence_check CHECK (((confidence IS NULL) OR ((confidence >= (0)::numeric) AND (confidence <= (1)::numeric))))
 );
+
 
 --
 -- Name: judgments; Type: TABLE; Schema: public; Owner: -
@@ -247,6 +325,7 @@ CREATE TABLE public.judgments (
     CONSTRAINT judgments_refresh_interval_days_check CHECK (((refresh_interval_days IS NULL) OR (refresh_interval_days > 0)))
 );
 
+
 --
 -- Name: outbox_events; Type: TABLE; Schema: public; Owner: -
 --
@@ -266,6 +345,7 @@ CREATE TABLE public.outbox_events (
     CONSTRAINT outbox_events_check CHECK (((published_at IS NULL) OR (published_at >= created_at))),
     CONSTRAINT outbox_events_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text))
 );
+
 
 --
 -- Name: prompt_templates; Type: TABLE; Schema: public; Owner: -
@@ -291,6 +371,7 @@ CREATE TABLE public.prompt_templates (
     CONSTRAINT prompt_templates_token_budget_check CHECK (((token_budget IS NULL) OR (token_budget > 0)))
 );
 
+
 --
 -- Name: query_runs; Type: TABLE; Schema: public; Owner: -
 --
@@ -313,6 +394,7 @@ CREATE TABLE public.query_runs (
     CONSTRAINT query_runs_metadata_check CHECK (((metadata IS NULL) OR (jsonb_typeof(metadata) = 'object'::text))),
     CONSTRAINT query_runs_retrieved_chunks_check CHECK (((retrieved_chunks IS NULL) OR (jsonb_typeof(retrieved_chunks) = 'array'::text)))
 );
+
 
 --
 -- Name: source_files; Type: TABLE; Schema: public; Owner: -
@@ -340,6 +422,7 @@ CREATE TABLE public.source_files (
     CONSTRAINT source_files_page_count_check CHECK (((page_count IS NULL) OR (page_count >= 0)))
 );
 
+
 --
 -- Name: source_pages; Type: TABLE; Schema: public; Owner: -
 --
@@ -355,6 +438,7 @@ CREATE TABLE public.source_pages (
     CONSTRAINT source_pages_page_number_check CHECK ((page_number > 0)),
     CONSTRAINT source_pages_quality_score_check CHECK (((quality_score IS NULL) OR ((quality_score >= (0)::numeric) AND (quality_score <= (1)::numeric))))
 );
+
 
 --
 -- Name: user_activity_logs; Type: TABLE; Schema: public; Owner: -
@@ -374,6 +458,7 @@ CREATE TABLE public.user_activity_logs (
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     CONSTRAINT user_activity_logs_metadata_check CHECK (((metadata IS NULL) OR (jsonb_typeof(metadata) = 'object'::text)))
 );
+
 
 --
 -- Name: user_sessions; Type: TABLE; Schema: public; Owner: -
@@ -395,6 +480,7 @@ CREATE TABLE public.user_sessions (
     CONSTRAINT user_sessions_check1 CHECK (((logout_at IS NULL) OR (logout_at >= login_at)))
 );
 
+
 --
 -- Name: users; Type: TABLE; Schema: public; Owner: -
 --
@@ -414,129 +500,865 @@ CREATE TABLE public.users (
     CONSTRAINT users_username_check CHECK ((length(btrim(username)) > 0))
 );
 
---
--- Constraints & Keys
---
-
-ALTER TABLE ONLY public.audit_logs ADD CONSTRAINT audit_logs_pkey PRIMARY KEY (audit_log_uuid);
-ALTER TABLE ONLY public.categories ADD CONSTRAINT categories_name_key UNIQUE (name);
-ALTER TABLE ONLY public.categories ADD CONSTRAINT categories_pkey PRIMARY KEY (category_uuid);
-ALTER TABLE ONLY public.categories ADD CONSTRAINT categories_slug_key UNIQUE (slug);
-ALTER TABLE ONLY public.chunk_embeddings ADD CONSTRAINT chunk_embeddings_chunk_uuid_embedding_model_uuid_key UNIQUE (chunk_uuid, embedding_model_uuid);
-ALTER TABLE ONLY public.chunk_embeddings ADD CONSTRAINT chunk_embeddings_pkey PRIMARY KEY (chunk_embedding_uuid);
-ALTER TABLE ONLY public.chunks ADD CONSTRAINT chunks_pkey PRIMARY KEY (chunk_uuid);
-ALTER TABLE ONLY public.chunks ADD CONSTRAINT chunks_source_file_uuid_chunk_index_key UNIQUE (source_file_uuid, chunk_index);
-ALTER TABLE ONLY public.citation_checks ADD CONSTRAINT citation_checks_pkey PRIMARY KEY (citation_check_uuid);
-ALTER TABLE ONLY public.citation_history ADD CONSTRAINT citation_history_pkey PRIMARY KEY (citation_history_uuid);
-ALTER TABLE ONLY public.citations ADD CONSTRAINT citations_pkey PRIMARY KEY (citation_uuid);
-ALTER TABLE ONLY public.embedding_models ADD CONSTRAINT embedding_models_pkey PRIMARY KEY (embedding_model_uuid);
-ALTER TABLE ONLY public.embedding_models ADD CONSTRAINT embedding_models_provider_model_id_version_key UNIQUE (provider, model_id, version);
-ALTER TABLE ONLY public.extraction_runs ADD CONSTRAINT extraction_runs_pkey PRIMARY KEY (extraction_run_uuid);
-ALTER TABLE ONLY public.ingestion_runs ADD CONSTRAINT ingestion_runs_idempotency_key_key UNIQUE (idempotency_key);
-ALTER TABLE ONLY public.ingestion_runs ADD CONSTRAINT ingestion_runs_pkey PRIMARY KEY (ingestion_run_uuid);
-ALTER TABLE ONLY public.judgment_categories ADD CONSTRAINT judgment_categories_judgment_uuid_category_uuid_key UNIQUE (judgment_uuid, category_uuid);
-ALTER TABLE ONLY public.judgment_categories ADD CONSTRAINT judgment_categories_pkey PRIMARY KEY (judgment_category_uuid);
-ALTER TABLE ONLY public.judgments ADD CONSTRAINT judgments_judgment_id_key UNIQUE (judgment_id);
-ALTER TABLE ONLY public.judgments ADD CONSTRAINT judgments_pkey PRIMARY KEY (judgment_uuid);
-ALTER TABLE ONLY public.outbox_events ADD CONSTRAINT outbox_events_pkey PRIMARY KEY (outbox_event_uuid);
-ALTER TABLE ONLY public.prompt_templates ADD CONSTRAINT prompt_templates_pkey PRIMARY KEY (prompt_template_uuid);
-ALTER TABLE ONLY public.prompt_templates ADD CONSTRAINT prompt_templates_template_id_stage_template_version_key UNIQUE (template_id, stage, template_version);
-ALTER TABLE ONLY public.query_runs ADD CONSTRAINT query_runs_pkey PRIMARY KEY (query_run_uuid);
-ALTER TABLE ONLY public.source_files ADD CONSTRAINT source_files_judgment_uuid_version_number_key UNIQUE (judgment_uuid, version_number);
-ALTER TABLE ONLY public.source_files ADD CONSTRAINT source_files_pkey PRIMARY KEY (source_file_uuid);
-ALTER TABLE ONLY public.source_pages ADD CONSTRAINT source_pages_pkey PRIMARY KEY (source_page_uuid);
-ALTER TABLE ONLY public.source_pages ADD CONSTRAINT source_pages_source_file_uuid_page_number_key UNIQUE (source_file_uuid, page_number);
-ALTER TABLE ONLY public.user_activity_logs ADD CONSTRAINT user_activity_logs_pkey PRIMARY KEY (user_activity_log_uuid);
-ALTER TABLE ONLY public.user_sessions ADD CONSTRAINT user_sessions_pkey PRIMARY KEY (session_uuid);
-ALTER TABLE ONLY public.user_sessions ADD CONSTRAINT user_sessions_session_token_hash_key UNIQUE (session_token_hash);
-ALTER TABLE ONLY public.users ADD CONSTRAINT users_email_key UNIQUE (email);
-ALTER TABLE ONLY public.users ADD CONSTRAINT users_pkey PRIMARY KEY (user_uuid);
-ALTER TABLE ONLY public.users ADD CONSTRAINT users_username_key UNIQUE (username);
 
 --
--- Indexes
+-- Name: audit_logs audit_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_logs
+    ADD CONSTRAINT audit_logs_pkey PRIMARY KEY (audit_log_uuid);
+
+
+--
+-- Name: categories categories_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.categories
+    ADD CONSTRAINT categories_name_key UNIQUE (name);
+
+
+--
+-- Name: categories categories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.categories
+    ADD CONSTRAINT categories_pkey PRIMARY KEY (category_uuid);
+
+
+--
+-- Name: categories categories_slug_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.categories
+    ADD CONSTRAINT categories_slug_key UNIQUE (slug);
+
+
+--
+-- Name: chunk_embeddings chunk_embeddings_chunk_uuid_embedding_model_uuid_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chunk_embeddings
+    ADD CONSTRAINT chunk_embeddings_chunk_uuid_embedding_model_uuid_key UNIQUE (chunk_uuid, embedding_model_uuid);
+
+
+--
+-- Name: chunk_embeddings chunk_embeddings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chunk_embeddings
+    ADD CONSTRAINT chunk_embeddings_pkey PRIMARY KEY (chunk_embedding_uuid);
+
+
+--
+-- Name: chunks chunks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chunks
+    ADD CONSTRAINT chunks_pkey PRIMARY KEY (chunk_uuid);
+
+
+--
+-- Name: chunks chunks_source_file_uuid_chunk_index_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chunks
+    ADD CONSTRAINT chunks_source_file_uuid_chunk_index_key UNIQUE (source_file_uuid, chunk_index);
+
+
+--
+-- Name: citation_checks citation_checks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citation_checks
+    ADD CONSTRAINT citation_checks_pkey PRIMARY KEY (citation_check_uuid);
+
+
+--
+-- Name: citation_history citation_history_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citation_history
+    ADD CONSTRAINT citation_history_pkey PRIMARY KEY (citation_history_uuid);
+
+
+--
+-- Name: citations citations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citations
+    ADD CONSTRAINT citations_pkey PRIMARY KEY (citation_uuid);
+
+
+--
+-- Name: embedding_models embedding_models_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.embedding_models
+    ADD CONSTRAINT embedding_models_pkey PRIMARY KEY (embedding_model_uuid);
+
+
+--
+-- Name: embedding_models embedding_models_provider_model_id_version_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.embedding_models
+    ADD CONSTRAINT embedding_models_provider_model_id_version_key UNIQUE (provider, model_id, version);
+
+
+--
+-- Name: extraction_runs extraction_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.extraction_runs
+    ADD CONSTRAINT extraction_runs_pkey PRIMARY KEY (extraction_run_uuid);
+
+
+--
+-- Name: ingestion_runs ingestion_runs_idempotency_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ingestion_runs
+    ADD CONSTRAINT ingestion_runs_idempotency_key_key UNIQUE (idempotency_key);
+
+
+--
+-- Name: ingestion_runs ingestion_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ingestion_runs
+    ADD CONSTRAINT ingestion_runs_pkey PRIMARY KEY (ingestion_run_uuid);
+
+
+--
+-- Name: judgment_categories judgment_categories_judgment_uuid_category_uuid_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.judgment_categories
+    ADD CONSTRAINT judgment_categories_judgment_uuid_category_uuid_key UNIQUE (judgment_uuid, category_uuid);
+
+
+--
+-- Name: judgment_categories judgment_categories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.judgment_categories
+    ADD CONSTRAINT judgment_categories_pkey PRIMARY KEY (judgment_category_uuid);
+
+
+--
+-- Name: judgments judgments_judgment_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.judgments
+    ADD CONSTRAINT judgments_judgment_id_key UNIQUE (judgment_id);
+
+
+--
+-- Name: judgments judgments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.judgments
+    ADD CONSTRAINT judgments_pkey PRIMARY KEY (judgment_uuid);
+
+
+--
+-- Name: outbox_events outbox_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.outbox_events
+    ADD CONSTRAINT outbox_events_pkey PRIMARY KEY (outbox_event_uuid);
+
+
+--
+-- Name: prompt_templates prompt_templates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.prompt_templates
+    ADD CONSTRAINT prompt_templates_pkey PRIMARY KEY (prompt_template_uuid);
+
+
+--
+-- Name: prompt_templates prompt_templates_template_id_stage_template_version_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.prompt_templates
+    ADD CONSTRAINT prompt_templates_template_id_stage_template_version_key UNIQUE (template_id, stage, template_version);
+
+
+--
+-- Name: query_runs query_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.query_runs
+    ADD CONSTRAINT query_runs_pkey PRIMARY KEY (query_run_uuid);
+
+
+--
+-- Name: source_files source_files_judgment_uuid_version_number_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_files
+    ADD CONSTRAINT source_files_judgment_uuid_version_number_key UNIQUE (judgment_uuid, version_number);
+
+
+--
+-- Name: source_files source_files_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_files
+    ADD CONSTRAINT source_files_pkey PRIMARY KEY (source_file_uuid);
+
+
+--
+-- Name: source_pages source_pages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_pages
+    ADD CONSTRAINT source_pages_pkey PRIMARY KEY (source_page_uuid);
+
+
+--
+-- Name: source_pages source_pages_source_file_uuid_page_number_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_pages
+    ADD CONSTRAINT source_pages_source_file_uuid_page_number_key UNIQUE (source_file_uuid, page_number);
+
+
+--
+-- Name: user_activity_logs user_activity_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_activity_logs
+    ADD CONSTRAINT user_activity_logs_pkey PRIMARY KEY (user_activity_log_uuid);
+
+
+--
+-- Name: user_sessions user_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_sessions
+    ADD CONSTRAINT user_sessions_pkey PRIMARY KEY (session_uuid);
+
+
+--
+-- Name: user_sessions user_sessions_session_token_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_sessions
+    ADD CONSTRAINT user_sessions_session_token_hash_key UNIQUE (session_token_hash);
+
+
+--
+-- Name: users users_email_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.users
+    ADD CONSTRAINT users_email_key UNIQUE (email);
+
+
+--
+-- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.users
+    ADD CONSTRAINT users_pkey PRIMARY KEY (user_uuid);
+
+
+--
+-- Name: users users_username_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.users
+    ADD CONSTRAINT users_username_key UNIQUE (username);
+
+
+--
+-- Name: audit_logs_category_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX audit_logs_category_created_idx ON public.audit_logs USING btree (event_category, created_at DESC);
+
+
+--
+-- Name: audit_logs_resource_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX audit_logs_resource_idx ON public.audit_logs USING btree (resource_type, resource_id);
+
+
+--
+-- Name: audit_logs_severity_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX audit_logs_severity_created_idx ON public.audit_logs USING btree (severity, created_at DESC);
+
+
+--
+-- Name: audit_logs_user_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX audit_logs_user_created_idx ON public.audit_logs USING btree (user_uuid, created_at DESC);
+
+
+--
+-- Name: chunk_embeddings_corpus_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX chunk_embeddings_corpus_idx ON public.chunk_embeddings USING btree (corpus_resource_name);
+
+
+--
+-- Name: chunk_embeddings_external_chunk_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX chunk_embeddings_external_chunk_idx ON public.chunk_embeddings USING btree (external_chunk_resource_name);
+
+
+--
+-- Name: chunk_embeddings_model_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX chunk_embeddings_model_idx ON public.chunk_embeddings USING btree (embedding_model_uuid);
+
+
+--
+-- Name: chunk_embeddings_sync_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX chunk_embeddings_sync_status_idx ON public.chunk_embeddings USING btree (sync_status);
+
+
+--
+-- Name: chunks_extraction_run_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX chunks_extraction_run_idx ON public.chunks USING btree (extraction_run_uuid);
+
+
+--
+-- Name: chunks_judgment_active_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX chunks_judgment_active_idx ON public.chunks USING btree (judgment_uuid, is_active);
+
+
+--
+-- Name: chunks_last_seen_ingestion_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX chunks_last_seen_ingestion_idx ON public.chunks USING btree (last_seen_ingestion_run_uuid);
+
+
+--
+-- Name: chunks_sha256_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX chunks_sha256_idx ON public.chunks USING btree (content_sha256);
+
+
+--
+-- Name: chunks_source_file_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX chunks_source_file_idx ON public.chunks USING btree (source_file_uuid);
+
+
+--
+-- Name: citation_checks_chunk_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX citation_checks_chunk_idx ON public.citation_checks USING btree (chunk_uuid);
+
+
+--
+-- Name: citation_checks_judgment_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX citation_checks_judgment_idx ON public.citation_checks USING btree (judgment_uuid);
+
+
+--
+-- Name: citation_checks_query_checked_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX citation_checks_query_checked_idx ON public.citation_checks USING btree (query_run_uuid, checked_at DESC);
+
+
+--
+-- Name: citation_checks_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX citation_checks_status_idx ON public.citation_checks USING btree (verification_status);
+
+
+--
+-- Name: citation_history_citation_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX citation_history_citation_idx ON public.citation_history USING btree (citation_uuid);
+
+
+--
+-- Name: citation_history_judgment_changed_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX citation_history_judgment_changed_idx ON public.citation_history USING btree (judgment_uuid, changed_at DESC);
+
+
+--
+-- Name: citations_judgment_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX citations_judgment_idx ON public.citations USING btree (judgment_uuid);
+
+
+--
+-- Name: citations_normalized_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX citations_normalized_idx ON public.citations USING btree (normalized_citation);
+
+
+--
+-- Name: extraction_runs_ingestion_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX extraction_runs_ingestion_idx ON public.extraction_runs USING btree (ingestion_run_uuid);
+
+
+--
+-- Name: extraction_runs_source_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX extraction_runs_source_created_idx ON public.extraction_runs USING btree (source_file_uuid, created_at DESC);
+
+
+--
+-- Name: extraction_runs_status_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX extraction_runs_status_created_idx ON public.extraction_runs USING btree (processing_status, created_at);
+
+
+--
+-- Name: idx_chunks_bm25; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_chunks_bm25 ON public.chunks USING bm25 (content) WITH (text_config=english);
+
+
+--
+-- Name: idx_chunks_embedding_hnsw; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX idx_chunks_embedding_hnsw ON public.chunks USING hnsw (embedding public.vector_cosine_ops) WITH (m='16', ef_construction='64');
+
+
+--
+-- Name: idx_chunks_fts; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX idx_chunks_fts ON public.chunks USING gin (search_vector);
+
+
+--
+-- Name: idx_chunks_metadata_gin; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX idx_chunks_metadata_gin ON public.chunks USING gin (metadata);
+
+
+--
+-- Name: ingestion_runs_active_heartbeat_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX ingestion_runs_active_heartbeat_idx ON public.ingestion_runs USING btree (heartbeat_at) WHERE (finished_at IS NULL);
+
+
+--
+-- Name: ingestion_runs_source_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX ingestion_runs_source_created_idx ON public.ingestion_runs USING btree (source_file_uuid, created_at DESC);
+
+
+--
+-- Name: ingestion_runs_status_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX ingestion_runs_status_created_idx ON public.ingestion_runs USING btree (processing_status, created_at);
+
+
+--
+-- Name: judgment_categories_category_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX judgment_categories_category_idx ON public.judgment_categories USING btree (category_uuid);
+
+
+--
+-- Name: outbox_events_aggregate_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX outbox_events_aggregate_idx ON public.outbox_events USING btree (aggregate_type, aggregate_uuid);
+
+
+--
+-- Name: outbox_events_delivery_available_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX outbox_events_delivery_available_idx ON public.outbox_events USING btree (delivery_status, available_at, created_at);
+
+
+--
+-- Name: outbox_events_unpublished_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX outbox_events_unpublished_idx ON public.outbox_events USING btree (available_at, created_at) WHERE (published_at IS NULL);
+
+
+--
+-- Name: prompt_templates_active_stage_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX prompt_templates_active_stage_idx ON public.prompt_templates USING btree (stage, is_active);
+
+
+--
+-- Name: query_runs_prompt_template_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX query_runs_prompt_template_idx ON public.query_runs USING btree (prompt_template_uuid);
+
+
+--
+-- Name: query_runs_session_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX query_runs_session_created_idx ON public.query_runs USING btree (session_uuid, created_at DESC);
+
+
+--
+-- Name: query_runs_status_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX query_runs_status_created_idx ON public.query_runs USING btree (status, created_at DESC);
+
+
+--
+-- Name: query_runs_user_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX query_runs_user_created_idx ON public.query_runs USING btree (user_uuid, created_at DESC);
+
+
+--
+-- Name: source_files_ingestion_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX source_files_ingestion_status_idx ON public.source_files USING btree (ingestion_status);
+
+
+--
+-- Name: source_files_judgment_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX source_files_judgment_created_idx ON public.source_files USING btree (judgment_uuid, created_at DESC);
+
+
+--
+-- Name: source_files_one_current_per_judgment_uq; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE UNIQUE INDEX source_files_one_current_per_judgment_uq ON public.source_files USING btree (judgment_uuid) WHERE is_current;
+
+
+--
+-- Name: source_pages_source_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX source_pages_source_idx ON public.source_pages USING btree (source_file_uuid);
+
+
+--
+-- Name: user_activity_logs_event_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX user_activity_logs_event_created_idx ON public.user_activity_logs USING btree (event_type, created_at DESC);
+
+
+--
+-- Name: user_activity_logs_session_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX user_activity_logs_session_created_idx ON public.user_activity_logs USING btree (session_uuid, created_at DESC);
+
+
+--
+-- Name: user_activity_logs_user_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX user_activity_logs_user_created_idx ON public.user_activity_logs USING btree (user_uuid, created_at DESC);
+
+
+--
+-- Name: user_sessions_status_expiry_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX user_sessions_status_expiry_idx ON public.user_sessions USING btree (status, expires_at);
+
+
+--
+-- Name: user_sessions_user_login_idx; Type: INDEX; Schema: public; Owner: -
+--
+
 CREATE INDEX user_sessions_user_login_idx ON public.user_sessions USING btree (user_uuid, login_at DESC);
 
+
 --
--- Foreign Key Constraints
+-- Name: audit_logs audit_logs_session_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.audit_logs ADD CONSTRAINT audit_logs_session_uuid_fkey FOREIGN KEY (session_uuid) REFERENCES public.user_sessions(session_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.audit_logs ADD CONSTRAINT audit_logs_user_uuid_fkey FOREIGN KEY (user_uuid) REFERENCES public.users(user_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.chunk_embeddings ADD CONSTRAINT chunk_embeddings_chunk_uuid_fkey FOREIGN KEY (chunk_uuid) REFERENCES public.chunks(chunk_uuid) ON DELETE CASCADE;
-ALTER TABLE ONLY public.chunk_embeddings ADD CONSTRAINT chunk_embeddings_embedding_model_uuid_fkey FOREIGN KEY (embedding_model_uuid) REFERENCES public.embedding_models(embedding_model_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.chunks ADD CONSTRAINT chunks_extraction_run_uuid_fkey FOREIGN KEY (extraction_run_uuid) REFERENCES public.extraction_runs(extraction_run_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.chunks ADD CONSTRAINT chunks_judgment_uuid_fkey FOREIGN KEY (judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE CASCADE;
-ALTER TABLE ONLY public.chunks ADD CONSTRAINT chunks_last_seen_ingestion_run_uuid_fkey FOREIGN KEY (last_seen_ingestion_run_uuid) REFERENCES public.ingestion_runs(ingestion_run_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.chunks ADD CONSTRAINT chunks_source_file_uuid_fkey FOREIGN KEY (source_file_uuid) REFERENCES public.source_files(source_file_uuid) ON DELETE CASCADE;
-ALTER TABLE ONLY public.citation_checks ADD CONSTRAINT citation_checks_chunk_uuid_fkey FOREIGN KEY (chunk_uuid) REFERENCES public.chunks(chunk_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.citation_checks ADD CONSTRAINT citation_checks_judgment_uuid_fkey FOREIGN KEY (judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.citation_checks ADD CONSTRAINT citation_checks_query_run_uuid_fkey FOREIGN KEY (query_run_uuid) REFERENCES public.query_runs(query_run_uuid) ON DELETE CASCADE;
-ALTER TABLE ONLY public.citation_history ADD CONSTRAINT citation_history_changed_by_user_uuid_fkey FOREIGN KEY (changed_by_user_uuid) REFERENCES public.users(user_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.citation_history ADD CONSTRAINT citation_history_citation_uuid_fkey FOREIGN KEY (citation_uuid) REFERENCES public.citations(citation_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.citation_history ADD CONSTRAINT citation_history_judgment_uuid_fkey FOREIGN KEY (judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE CASCADE;
-ALTER TABLE ONLY public.citations ADD CONSTRAINT citations_judgment_uuid_fkey FOREIGN KEY (judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE CASCADE;
-ALTER TABLE ONLY public.extraction_runs ADD CONSTRAINT extraction_runs_ingestion_run_uuid_fkey FOREIGN KEY (ingestion_run_uuid) REFERENCES public.ingestion_runs(ingestion_run_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.extraction_runs ADD CONSTRAINT extraction_runs_source_file_uuid_fkey FOREIGN KEY (source_file_uuid) REFERENCES public.source_files(source_file_uuid) ON DELETE CASCADE;
-ALTER TABLE ONLY public.ingestion_runs ADD CONSTRAINT ingestion_runs_source_file_uuid_fkey FOREIGN KEY (source_file_uuid) REFERENCES public.source_files(source_file_uuid) ON DELETE CASCADE;
-ALTER TABLE ONLY public.judgment_categories ADD CONSTRAINT judgment_categories_category_uuid_fkey FOREIGN KEY (category_uuid) REFERENCES public.categories(category_uuid) ON DELETE CASCADE;
-ALTER TABLE ONLY public.judgment_categories ADD CONSTRAINT judgment_categories_judgment_uuid_fkey FOREIGN KEY (judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE CASCADE;
-ALTER TABLE ONLY public.judgments ADD CONSTRAINT judgments_overruled_by_judgment_uuid_fkey FOREIGN KEY (overruled_by_judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.query_runs ADD CONSTRAINT query_runs_prompt_template_uuid_fkey FOREIGN KEY (prompt_template_uuid) REFERENCES public.prompt_templates(prompt_template_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.query_runs ADD CONSTRAINT query_runs_session_uuid_fkey FOREIGN KEY (session_uuid) REFERENCES public.user_sessions(session_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.query_runs ADD CONSTRAINT query_runs_user_uuid_fkey FOREIGN KEY (user_uuid) REFERENCES public.users(user_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.source_files ADD CONSTRAINT source_files_created_by_user_uuid_fkey FOREIGN KEY (created_by_user_uuid) REFERENCES public.users(user_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.source_files ADD CONSTRAINT source_files_judgment_uuid_fkey FOREIGN KEY (judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE CASCADE;
-ALTER TABLE ONLY public.source_pages ADD CONSTRAINT source_pages_source_file_uuid_fkey FOREIGN KEY (source_file_uuid) REFERENCES public.source_files(source_file_uuid) ON DELETE CASCADE;
-ALTER TABLE ONLY public.user_activity_logs ADD CONSTRAINT user_activity_logs_session_uuid_fkey FOREIGN KEY (session_uuid) REFERENCES public.user_sessions(session_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.user_activity_logs ADD CONSTRAINT user_activity_logs_user_uuid_fkey FOREIGN KEY (user_uuid) REFERENCES public.users(user_uuid) ON DELETE SET NULL;
-ALTER TABLE ONLY public.user_sessions ADD CONSTRAINT user_sessions_user_uuid_fkey FOREIGN KEY (user_uuid) REFERENCES public.users(user_uuid) ON DELETE CASCADE;
+ALTER TABLE ONLY public.audit_logs
+    ADD CONSTRAINT audit_logs_session_uuid_fkey FOREIGN KEY (session_uuid) REFERENCES public.user_sessions(session_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: audit_logs audit_logs_user_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_logs
+    ADD CONSTRAINT audit_logs_user_uuid_fkey FOREIGN KEY (user_uuid) REFERENCES public.users(user_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: chunk_embeddings chunk_embeddings_chunk_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chunk_embeddings
+    ADD CONSTRAINT chunk_embeddings_chunk_uuid_fkey FOREIGN KEY (chunk_uuid) REFERENCES public.chunks(chunk_uuid) ON DELETE CASCADE;
+
+
+--
+-- Name: chunk_embeddings chunk_embeddings_embedding_model_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chunk_embeddings
+    ADD CONSTRAINT chunk_embeddings_embedding_model_uuid_fkey FOREIGN KEY (embedding_model_uuid) REFERENCES public.embedding_models(embedding_model_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: chunks chunks_extraction_run_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chunks
+    ADD CONSTRAINT chunks_extraction_run_uuid_fkey FOREIGN KEY (extraction_run_uuid) REFERENCES public.extraction_runs(extraction_run_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: chunks chunks_judgment_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chunks
+    ADD CONSTRAINT chunks_judgment_uuid_fkey FOREIGN KEY (judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE CASCADE;
+
+
+--
+-- Name: chunks chunks_last_seen_ingestion_run_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chunks
+    ADD CONSTRAINT chunks_last_seen_ingestion_run_uuid_fkey FOREIGN KEY (last_seen_ingestion_run_uuid) REFERENCES public.ingestion_runs(ingestion_run_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: chunks chunks_source_file_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chunks
+    ADD CONSTRAINT chunks_source_file_uuid_fkey FOREIGN KEY (source_file_uuid) REFERENCES public.source_files(source_file_uuid) ON DELETE CASCADE;
+
+
+--
+-- Name: citation_checks citation_checks_chunk_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citation_checks
+    ADD CONSTRAINT citation_checks_chunk_uuid_fkey FOREIGN KEY (chunk_uuid) REFERENCES public.chunks(chunk_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: citation_checks citation_checks_judgment_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citation_checks
+    ADD CONSTRAINT citation_checks_judgment_uuid_fkey FOREIGN KEY (judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: citation_checks citation_checks_query_run_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citation_checks
+    ADD CONSTRAINT citation_checks_query_run_uuid_fkey FOREIGN KEY (query_run_uuid) REFERENCES public.query_runs(query_run_uuid) ON DELETE CASCADE;
+
+
+--
+-- Name: citation_history citation_history_changed_by_user_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citation_history
+    ADD CONSTRAINT citation_history_changed_by_user_uuid_fkey FOREIGN KEY (changed_by_user_uuid) REFERENCES public.users(user_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: citation_history citation_history_citation_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citation_history
+    ADD CONSTRAINT citation_history_citation_uuid_fkey FOREIGN KEY (citation_uuid) REFERENCES public.citations(citation_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: citation_history citation_history_judgment_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citation_history
+    ADD CONSTRAINT citation_history_judgment_uuid_fkey FOREIGN KEY (judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE CASCADE;
+
+
+--
+-- Name: citations citations_judgment_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citations
+    ADD CONSTRAINT citations_judgment_uuid_fkey FOREIGN KEY (judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE CASCADE;
+
+
+--
+-- Name: extraction_runs extraction_runs_ingestion_run_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.extraction_runs
+    ADD CONSTRAINT extraction_runs_ingestion_run_uuid_fkey FOREIGN KEY (ingestion_run_uuid) REFERENCES public.ingestion_runs(ingestion_run_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: extraction_runs extraction_runs_source_file_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.extraction_runs
+    ADD CONSTRAINT extraction_runs_source_file_uuid_fkey FOREIGN KEY (source_file_uuid) REFERENCES public.source_files(source_file_uuid) ON DELETE CASCADE;
+
+
+--
+-- Name: ingestion_runs ingestion_runs_source_file_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ingestion_runs
+    ADD CONSTRAINT ingestion_runs_source_file_uuid_fkey FOREIGN KEY (source_file_uuid) REFERENCES public.source_files(source_file_uuid) ON DELETE CASCADE;
+
+
+--
+-- Name: judgment_categories judgment_categories_category_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.judgment_categories
+    ADD CONSTRAINT judgment_categories_category_uuid_fkey FOREIGN KEY (category_uuid) REFERENCES public.categories(category_uuid) ON DELETE CASCADE;
+
+
+--
+-- Name: judgment_categories judgment_categories_judgment_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.judgment_categories
+    ADD CONSTRAINT judgment_categories_judgment_uuid_fkey FOREIGN KEY (judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE CASCADE;
+
+
+--
+-- Name: judgments judgments_overruled_by_judgment_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.judgments
+    ADD CONSTRAINT judgments_overruled_by_judgment_uuid_fkey FOREIGN KEY (overruled_by_judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: query_runs query_runs_prompt_template_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.query_runs
+    ADD CONSTRAINT query_runs_prompt_template_uuid_fkey FOREIGN KEY (prompt_template_uuid) REFERENCES public.prompt_templates(prompt_template_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: query_runs query_runs_session_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.query_runs
+    ADD CONSTRAINT query_runs_session_uuid_fkey FOREIGN KEY (session_uuid) REFERENCES public.user_sessions(session_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: query_runs query_runs_user_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.query_runs
+    ADD CONSTRAINT query_runs_user_uuid_fkey FOREIGN KEY (user_uuid) REFERENCES public.users(user_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: source_files source_files_created_by_user_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_files
+    ADD CONSTRAINT source_files_created_by_user_uuid_fkey FOREIGN KEY (created_by_user_uuid) REFERENCES public.users(user_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: source_files source_files_judgment_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_files
+    ADD CONSTRAINT source_files_judgment_uuid_fkey FOREIGN KEY (judgment_uuid) REFERENCES public.judgments(judgment_uuid) ON DELETE CASCADE;
+
+
+--
+-- Name: source_pages source_pages_source_file_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_pages
+    ADD CONSTRAINT source_pages_source_file_uuid_fkey FOREIGN KEY (source_file_uuid) REFERENCES public.source_files(source_file_uuid) ON DELETE CASCADE;
+
+
+--
+-- Name: user_activity_logs user_activity_logs_session_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_activity_logs
+    ADD CONSTRAINT user_activity_logs_session_uuid_fkey FOREIGN KEY (session_uuid) REFERENCES public.user_sessions(session_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: user_activity_logs user_activity_logs_user_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_activity_logs
+    ADD CONSTRAINT user_activity_logs_user_uuid_fkey FOREIGN KEY (user_uuid) REFERENCES public.users(user_uuid) ON DELETE SET NULL;
+
+
+--
+-- Name: user_sessions user_sessions_user_uuid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_sessions
+    ADD CONSTRAINT user_sessions_user_uuid_fkey FOREIGN KEY (user_uuid) REFERENCES public.users(user_uuid) ON DELETE CASCADE;
+
+
+--
+-- PostgreSQL database dump complete
+--
+
+\unrestrict 99lnfCohYK2fDGPSLjsOcCoptooXi5tKy3e9LlwTSKFHGQMWPayCgm9sdkxqz7E
+

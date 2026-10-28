@@ -11,7 +11,6 @@ Integrates local OCR / PPStructure extractions with existing legal parser rules:
 """
 
 import re
-from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -301,11 +300,12 @@ class LegalStructureRecovery:
 
         if not is_first_page:
             header_patterns.extend([
-                re.compile(r"^\s*Bhawanip?ore\s+Banking\s+Cor.*$", re.IGNORECASE),
-                re.compile(r"^\s*A\.K\.\s*Gopalan\s+v\.\s+State\s+of\s+Madras.*$", re.IGNORECASE),
-                re.compile(r"^\s*Province\s+of\s+Bombay\s+v\.\s+K\.?\s*S\.?\s*Advani.*$", re.IGNORECASE),
-                re.compile(r"^\s*Chandrashekar\s+&\s+Anr\.?\s*$", re.IGNORECASE),
-                re.compile(r"^\s*A\s+v\.\s+KAMAN[I!]\s+EMPLOYEES.*$", re.IGNORECASE),
+                # Generalized legal adversary short title: "Party A v. Party B", "Party A vs. Party B"
+                re.compile(r"^\s*[\w\s.,\'&()/-]+\s+(?:v\.?|vs\.?|versus)(?:\s+[\w\s.,\'&()/-]+)?$", re.IGNORECASE),
+                # Generalized plural party suffixes: "... & Anr." or "... & Ors."
+                re.compile(r"^\s*[\w\s.,\'()/-]+\s+&\s+(?:Anr|Ors)\.?\s*$", re.IGNORECASE),
+                # Generalized corporate / entity party titles in top running headers
+                re.compile(r"^\s*[\w\s.,\'()/-]+(?:Banking\s+Cor|Corp(?:oration)?|Co(?:mpany)?|Ltd|Limited)\.?\s*$", re.IGNORECASE),
             ])
 
         start_idx = 0

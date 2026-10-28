@@ -78,10 +78,13 @@ class IngestionPipeline:
             if total_pages == 0:
                 raise ValueError(f"Empty PDF document: {pdf_path}")
 
-            # Extract opening metadata from first page
+            # Extract opening metadata across first two pages (front-matter spans pages 1 & 2 in SCR)
             p0_text = doc[0].get_text()
             p0_clean, is_sh_p0 = CaseBoundaryDetector.split_shared_page(p0_text, is_end_of_doc=False)
-            doc_meta = LegalMetadataExtractor.extract_metadata(p0_clean)
+            combined_meta_text = p0_clean
+            if len(doc) > 1:
+                combined_meta_text += "\n" + doc[1].get_text()
+            doc_meta = LegalMetadataExtractor.extract_metadata(combined_meta_text)
             case_title = f"{doc_meta.appellant or 'Appellant'} v. {doc_meta.respondent or 'Respondent'}"
 
             # Initialize 4-Stage Lifecycle Tracker
@@ -126,6 +129,22 @@ class IngestionPipeline:
                         shared_with_map[pno] = sh_doc
 
                 pz.cleaned_text = cl_text
+                # If text became empty, re-check image-only vs verified-blank vs raw text rescue
+                if not cl_text.strip():
+                    images = page_obj.get_images() if hasattr(page_obj, "get_images") else []
+                    raw_chars = len((page_obj.get_text("text") or "").strip())
+                    if images:
+                        pz.extraction_method = "image_only_pending_ocr"
+                        pz.ocr_quality = 0.0
+                    elif raw_chars > 0:
+                        # Raw text exists! Do not classify as verified_blank
+                        pz.cleaned_text = (page_obj.get_text("text") or "").strip()
+                        pz.extraction_method = "pymupdf_fallback"
+                        pz.ocr_quality = CoordinateZoneExtractor.calculate_ocr_quality(pz.cleaned_text, pz.is_born_digital)
+                    else:
+                        pz.extraction_method = "verified_blank"
+                        pz.ocr_quality = 1.0
+
                 pages_data.append(pz)
 
             tracker.complete_stage("parsing")

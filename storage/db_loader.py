@@ -11,15 +11,15 @@ import json
 import uuid
 import hashlib
 import datetime
-from typing import List, Optional
+from typing import Optional
 import sqlalchemy as sa
 from sqlalchemy import create_engine, text
 
 try:
-    from PCEV2.core.models import DocumentRecord, ChunkRecord
+    from PCEV2.core.models import DocumentRecord
     from PCEV2.config import config
 except ImportError:
-    from core.models import DocumentRecord, ChunkRecord
+    from core.models import DocumentRecord
     from config import config
 
 
@@ -35,7 +35,7 @@ class DatabaseLoader:
 
     def _verify_preflight(self):
         """Verifies schema existence without running any DDL."""
-        with self.engine.connect() as conn:
+        with self.engine.connect():
             insp = sa.inspect(self.engine)
             tables = set(insp.get_table_names())
             required = {
@@ -107,11 +107,14 @@ class DatabaseLoader:
             raw_date = meta.date_of_judgment
             iso_date = None
             if raw_date:
-                try:
-                    dt = datetime.datetime.strptime(raw_date.strip(), "%d %B %Y")
-                    iso_date = dt.strftime("%Y-%m-%d")
-                except Exception:
-                    iso_date = None
+                raw_str = raw_date.strip()
+                for fmt in ("%d %B %Y", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+                    try:
+                        dt = datetime.datetime.strptime(raw_str, fmt)
+                        iso_date = dt.strftime("%Y-%m-%d")
+                        break
+                    except Exception:
+                        continue
 
             j_params = {
                 "j_uuid": judgment_uuid,
@@ -154,13 +157,19 @@ class DatabaseLoader:
                 """), j_params)
 
             # -------------------------------------------------------------
-            # 2. Source Files (with content_sha256)
+            # 2. Source Files (with content_sha256 and portable relative path)
             # -------------------------------------------------------------
+            raw_sp = str(doc_rec.file_path or "")
+            try:
+                norm_storage_path = Path(raw_sp).resolve().relative_to(config.base_dir).as_posix()
+            except Exception:
+                norm_storage_path = raw_sp.replace("\\", "/")
+
             sf_params = {
                 "sf_uuid": source_file_uuid,
                 "j_uuid": judgment_uuid,
                 "filename": f"{doc_rec.document_id}.pdf",
-                "storage_path": doc_rec.file_path,
+                "storage_path": norm_storage_path,
                 "page_count": len(doc_rec.pages),
                 "pipe_ver": pipe_ver,
                 "fsize": file_size,
@@ -436,6 +445,18 @@ class DatabaseLoader:
                             :emb_ref, :sync_status, :last_synced_at, :v_store, :created_at, :updated_at
                         );
                     """), {**ce_params, "provider": emb_prov})
+
+                # PCE-EMB-002: Read-after-write verification to certify physical persistence
+                if is_synced:
+                    persisted_check = conn.execute(text("""
+                        SELECT COUNT(*) FROM chunk_embeddings
+                        WHERE chunk_uuid = :c_uuid AND embedding_model_uuid = :m_uuid
+                    """), {"c_uuid": c_uuid, "m_uuid": model_uuid}).scalar()
+                    if not persisted_check or persisted_check < 1:
+                        conn.execute(text("""
+                            UPDATE chunk_embeddings SET sync_status = 'PERSISTENCE_FAILED'
+                            WHERE chunk_uuid = :c_uuid AND embedding_model_uuid = :m_uuid
+                        """), {"c_uuid": c_uuid, "m_uuid": model_uuid})
 
             # -------------------------------------------------------------
             # 7. Citations

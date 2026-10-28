@@ -4,7 +4,7 @@ Tracks judicial opinions, front matter isolation, operative order chunks, and co
 """
 
 import re
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional
 
 
 class LawReportStructureTracker:
@@ -23,16 +23,18 @@ class LawReportStructureTracker:
     ]
 
     OPINION_DELIVERY_PATTERNS = [
-        re.compile(r"^\s*(?:19\d\d[.,\s]+[A-Za-z]+[.,\s]+\d{1,2}[.,\s]+)?The\s+Judgment\s+of\s+the\s+Court\s+was\s+delivered\s+by\s+(.*)$", re.IGNORECASE),
-        re.compile(r"^\s*(?:19\d\d[.,\s]+[A-Za-z]+[.,\s]+\d{1,2}[.,\s]+)?The\s+(?:following\s+)?Judgments\s+were\s+delivered\b", re.IGNORECASE),
-        re.compile(r"^\s*(?:19\d\d[.,\s]+[A-Za-z]+[.,\s]+\d{1,2}[.,\s]+)?The\s+Court\s+delivered\s+judgment\b", re.IGNORECASE),
-        re.compile(r"^\s*Judgment\s*/\s*Order\s+of\s+the\s+Supreme\s+Court\s*$", re.IGNORECASE),
-        re.compile(r"^\s*Per\s+([A-Z\s,.'–—\-]+?)\s*(?:C\.?\s*J\.?|JJ?\.?)\s*[-–—]\s*(.*)$", re.IGNORECASE),
+        re.compile(r"(?:19\d\d[.,\s]+[A-Za-z]+[.,\s]+\d{1,2}[.,\s]+)?The\s+Judgment\s+of\s+the\s+Court\s+was\s+delivered\s+by\s+(.*)$", re.IGNORECASE),
+        re.compile(r"(?:19\d\d[.,\s]+[A-Za-z]+[.,\s]+\d{1,2}[.,\s]+)?The\s+(?:following\s+)?Judgments\s+were\s+delivered\b", re.IGNORECASE),
+        re.compile(r"(?:19\d\d[.,\s]+[A-Za-z]+[.,\s]+\d{1,2}[.,\s]+)?The\s+Court\s+delivered\s+judgment\b", re.IGNORECASE),
+        re.compile(r"\bJudgment\s*/\s*Order\s+of\s+the\s+Supreme\s+Court\b", re.IGNORECASE),
+        re.compile(r"\bPer\s+([A-Z\s,.'–—\-]+?)\s*(?:C\.?\s*J\.?|JJ?\.?)\s*[-–—:]\s*(.*)$", re.IGNORECASE),
     ]
 
     OPINION_START_PATTERNS = [
-        re.compile(r"^\s*([A-Z\s,.'–—\-]+?)\s*(?:C\.?\s*J\.?|JJ?\.?)\s*[-–—]\s*(.*)$", re.IGNORECASE),
-        re.compile(r"^\s*([A-Za-z\s,.'–—\-]+?),\s*J\.?\s*$", re.IGNORECASE),
+        re.compile(r"^\s*([A-Z\s,.'–—\-]+?)\s*(?:C\.?\s*J\.?|JJ?\.?)\s*[-–—:]\s*(.*)$", re.IGNORECASE),
+        re.compile(r"^\s*([A-Za-z\s,.'–—\-]+?),\s*(?:C\.?\s*J\.?|J\.?)\s*$", re.IGNORECASE),
+        re.compile(r"\b([A-Z\s,.'–—\-]{2,30})\s*,\s*(?:C\.?\s*J\.?|J\.?)\s*[-–—:]", re.IGNORECASE),
+        re.compile(r"\b([A-Z\s,.'–—\-]{2,30})\s+(?:C\.?\s*J\.?|J\.?)\s*[-–—:]", re.IGNORECASE),
     ]
 
     OPERATIVE_ORDER_PATTERNS = [
@@ -60,18 +62,19 @@ class LawReportStructureTracker:
     ]
 
     OPINION_SPLIT_REGEX = re.compile(
-        r'(?=\n\s*(?:'
-        r'(?:19\d\d[.,\s]+[A-Za-z]+[.,\s]+\d{1,2}[.,\s]+)?The\s+Judgment\s+of\s+the\s+Court\s+was\s+delivered\s+by|'
-        r'(?:19\d\d[.,\s]+[A-Za-z]+[.,\s]+\d{1,2}[.,\s]+)?The\s+(?:following\s+)?Judgments\s+were\s+delivered|'
-        r'(?:19\d\d[.,\s]+[A-Za-z]+[.,\s]+\d{1,2}[.,\s]+)?The\s+Court\s+delivered\s+judgment|'
+        r'(?=(?:\n|\s{1,4})(?:'
+        r'(?:19\d\d[.,\s]+[A-Za-z]+[.,\s]+\d{1,2}[.,\s]+)?(?:The\s+Judgment\s+of\s+the\s+Court\s+was\s+delivered\s+by|'
+        r'The\s+(?:following\s+)?Judgments\s+were\s+delivered|'
+        r'The\s+Court\s+delivered\s+judgment)|'
         r'Judgment\s*/\s*Order\s+of\s+the\s+Supreme\s+Court|'
-        r'Judgment\s*\n\s*[A-Za-z\s,.\'–—\-]+?,\s*J\.?'
+        r'Judgment\s*\n\s*[A-Za-z\s,.\'–—\-]+?,\s*J\.?|'
+        r'[A-Z\s,.\'–—\-]{2,30}\s*,\s*(?:C\.?\s*J\.?|J\.?|JJ\.?)\s*[-–—:]'
         r'))',
         re.IGNORECASE
     )
 
     ORDER_SPLIT_REGEX = re.compile(
-        r'(?=\n\s*(?:'
+        r'(?=(?:\n|\s{2,})(?:'
         r'Result\s+of\s+the\s+case:\s*|'
         r'(?:\d+\.\s*)?(?:The\s+)?Appeal\s+(?:stands\s+|is\s+accordingly\s+)?(?:dismissed|allowed)\.?|'
         r'Appeal\s+(?:dismissed|allowed)\.?|'
@@ -85,8 +88,8 @@ class LawReportStructureTracker:
     def __init__(self, bench_judges: Optional[List[str]] = None):
         self.bench_judges = bench_judges or []
         self.current_section = "HEADNOTE"
-        self.current_judge = None
-        self.confirmed_opinion_page = None
+        self.current_judge: Optional[str] = None
+        self.confirmed_opinion_page: Optional[int] = None
         self.is_front_matter_complete = False
         self.counsel_seen = False
 
@@ -113,7 +116,7 @@ class LawReportStructureTracker:
                 else:
                     expanded.append(pt)
 
-        classified = []
+        classified: List[Tuple[str, str, Optional[str], float]] = []
         pending_heading = None
 
         for p in expanded:
@@ -163,6 +166,27 @@ class LawReportStructureTracker:
                 self.current_judge = found_judge
                 self.current_section = "OPINION"
                 self.confirmed_opinion_page = page_number
+
+            # Front-matter termination boundary check:
+            # If counsel has appeared, or if we are beyond preliminary pages (page >= 3),
+            # and we encounter substantive numbered paragraphs or judicial analysis:
+            if not self.is_front_matter_complete and (self.counsel_seen or page_number >= 3):
+                p_lower = p.lower()
+                is_substantive_reasoning = bool(
+                    re.match(r"^\s*(?:\d{1,3}\.|\(\d{1,3}\)|\[\d{1,3}\]|para)", p, re.IGNORECASE)
+                    or any(phrase in p_lower for phrase in [
+                        "this is an appeal", "this appeal", "the appellant", "the petitioner",
+                        "the respondent", "learned counsel", "question for consideration",
+                        "leave granted", "held that", "in our view", "we have heard"
+                    ])
+                    or (page_number >= 4 and len(p) >= 120)
+                )
+                if is_substantive_reasoning:
+                    self.is_front_matter_complete = True
+                    self.current_section = "OPINION"
+                    if not self.current_judge and self.bench_judges:
+                        self.current_judge = self.bench_judges[0]
+                    self.confirmed_opinion_page = page_number
 
             if self.is_front_matter_complete and self.is_operative_order_paragraph(p):
                 classified.append((p, "ORDER", None, 0.90))

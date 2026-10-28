@@ -4,7 +4,7 @@ Extracts citation, docket, dates, bench, author (*), citations, and counsel from
 """
 
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 try:
     from PCEV2.core.models import PageMetadata
 except ImportError:
@@ -35,15 +35,36 @@ class LegalMetadataExtractor:
             meta.scr_citation = f"[{scr_m.group(1)}] {scr_m.group(2) or ''}S.C.R. {scr_m.group(3)}".replace("  ", " ").strip()
             meta.year = int(scr_m.group(1))
 
-        # 2. Case Number
-        case_num_m = re.search(r"\b((?:Criminal|Civil)\s+Appeal\s+No\.?\s+\d+\s+of\s+\d{4}|Petition\s+No\.?\s+[A-Z0-9]+\s+of\s+\d{4}|Case\s+No\.?\s+[A-Z0-9]+\s+of\s+\d{4})", text, re.IGNORECASE)
-        if case_num_m:
-            meta.case_number = case_num_m.group(1).strip()
+        # 2. Case Number (Multi-era appeal, petition, and case reference extractors)
+        case_patterns = [
+            r"\b((?:Criminal|Civil)?\s*Appeal\s+No\.?\s*[\d\w/-]+\s+of\s+\d{4})\b",
+            r"\b((?:Special\s+Leave\s+Petition|Writ\s+Petition|Review\s+Petition|Transfer\s+Petition)\s*(?:\([A-Za-z0-9\s]+\))?\s*No\.?\s*[\d\w/-]+\s+of\s+\d{4})\b",
+            r"\b(Case\s+No\.?\s*[A-Z0-9\w/-]+\s+of\s+\d{4})\b",
+            r"\b(Petition\s+No\.?\s*[A-Z0-9\w/-]+\s+of\s+\d{4})\b"
+        ]
+        for cp in case_patterns:
+            cm = re.search(cp, text, re.IGNORECASE)
+            if cm:
+                meta.case_number = re.sub(r"\s+", " ", cm.group(1)).strip()
+                break
 
-        # 3. Decision Date
-        date_m = re.search(r"\b(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})\b", text, re.IGNORECASE)
-        if date_m:
-            meta.date_of_judgment = date_m.group(1).strip()
+        # 3. Decision Date (Supporting modern digital and multi-era SCR formats)
+        date_patterns = [
+            # Standard / Ordinal: "06 January 2026", "14th March, 1950", "15th of December, 1948"
+            r"\b(\d{1,2}(?:st|nd|rd|th)?(?:\s+of)?\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+\d{4})\b",
+            # Month First: "March 14, 1950", "March, 14, 1950"
+            r"\b((?:January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+\d{1,2}(?:st|nd|rd|th)?[,\s]+\d{4})\b",
+            # Historical SCR Format: "1950. March, 14", "1951. October 25"
+            r"\b(\d{4}[.,\s]+(?:January|February|March|April|May|June|July|August|September|October|November|December)[.,\s]+\d{1,2}(?:st|nd|rd|th)?)\b",
+            # Formal preamble: "dated the 12th March, 1951"
+            r"\bdated\s+(?:the\s+)?(\d{1,2}(?:st|nd|rd|th)?\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+\d{4})\b"
+        ]
+        for dp in date_patterns:
+            dm = re.search(dp, text, re.IGNORECASE)
+            if dm:
+                raw_d = dm.group(1)
+                meta.date_of_judgment = re.sub(r"\s+", " ", raw_d).strip()
+                break
 
         # 4. Bench and Author Judge (asterisk '*')
         bench_block_m = re.search(r"\[\s*(?:SHRI|HON'BLE)?\s*([A-Za-z0-9\s,.*'’–—\-]+?)\s*JJ?\.?\s*\]", text, re.IGNORECASE)

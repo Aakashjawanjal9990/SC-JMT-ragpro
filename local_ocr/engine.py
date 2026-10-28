@@ -11,11 +11,9 @@ Features:
 import os
 import sys
 import time
-from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Union
 
-import fitz  # PyMuPDF
 import numpy as np
 
 from local_ocr.ocr_config import ocr_config, LocalOCRConfig
@@ -111,8 +109,9 @@ class LocalOCREngine:
                 opt_self._cfg["run_mode"] = "paddle"
 
             PaddlePredictorOption.setdefault_by_model_name = safe_set_default
-        except Exception:
-            pass
+        except Exception as err:
+            import logging
+            logging.getLogger(__name__).debug("PaddlePredictorOption safe patching skipped: %s", err)
 
         self._initialized = True
 
@@ -142,10 +141,10 @@ class LocalOCREngine:
     def render_page_to_numpy(page: Any, dpi: int = 150) -> np.ndarray:
         """Renders a PyMuPDF page to RGB numpy array."""
         pix = page.get_pixmap(dpi=dpi)
-        img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+        arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
         if pix.n == 4:
-            img = img[:, :, :3]
-        return img
+            return np.asarray(arr[:, :, :3])
+        return arr
 
     def ocr_page(
         self,
@@ -280,9 +279,9 @@ class LocalOCREngine:
             predictor = self._get_structure_predictor()
             results = predictor.predict(img)
 
-            md_blocks = []
-            tables = []
-            regions = []
+            md_blocks: List[str] = []
+            tables: List[Dict[str, Any]] = []
+            regions: List[Dict[str, Any]] = []
 
             if results:
                 for res in results:

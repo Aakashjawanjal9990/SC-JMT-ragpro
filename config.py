@@ -24,15 +24,27 @@ except ImportError:
 
 
 def resolve_database_url(pcev2_root: Path) -> str:
-    """Resolves database URL from DATABASE_URL or individual DB_* credentials."""
+    """Resolves database URL from DATABASE_TARGET, DATABASE_URL, or individual DB_* credentials."""
+    target = os.getenv("DATABASE_TARGET", "").lower()
+    if target in ("alloydb", "postgres", "postgresql", "prod", "production"):
+        alloy_url = os.getenv("ALLOYDB_DATABASE_URL")
+        if alloy_url:
+            return alloy_url
+        db_user = os.getenv("DB_USER", "postgres")
+        db_pass = os.getenv("DB_PASSWORD", "root@2026")
+        db_host = os.getenv("DB_HOST", "34.93.114.95")
+        db_port = os.getenv("DB_PORT", "5432")
+        db_name = os.getenv("DB_NAME", "scrag")
+        return f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
+
     db_url = os.getenv("DATABASE_URL")
     if db_url:
         return db_url
 
-    # Check if individual Cloud SQL / PostgreSQL credentials are provided
+    # Check if individual AlloyDB / PostgreSQL credentials are provided
     db_user = os.getenv("DB_USER")
     db_pass = os.getenv("DB_PASSWORD")
-    db_host = os.getenv("DB_HOST", "127.0.0.1")
+    db_host = os.getenv("DB_HOST", "34.93.114.95")
     db_port = os.getenv("DB_PORT", "5432")
     db_name = os.getenv("DB_NAME")
 

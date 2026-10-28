@@ -6,6 +6,7 @@ and image-only page status recognition.
 All coordinate thresholds dynamically loaded from environment configuration (.env).
 """
 
+import logging
 import re
 import unicodedata
 from typing import List, Tuple, Optional, Any
@@ -15,6 +16,8 @@ try:
 except ImportError:
     from core.models import ExtractedPageZones
     from config import config
+
+logger = logging.getLogger(__name__)
 
 
 COMMON_LEGAL_WORDS = {
@@ -79,13 +82,28 @@ class CoordinateZoneExtractor:
 
     HEADER_PATTERNS = [
         re.compile(r"^\s*(?:\[\d{4}\]\s*)?(?:\d{1,4}\s+)?(?:SUPREME\s+COURT\s+REPORTS?|S\.?C\.?R\.?)(?:\s+(?:\[\d{4}\]|S\.?C\.?R\.?|\d{1,4}))*\s*$", re.IGNORECASE),
-        re.compile(r"^\s*The\s+Karnataka\s+Lokayuktha.*Bagalkot\s+v\.?\s*$", re.IGNORECASE),
-        re.compile(r"^\s*Chandrashekar\s+&\s+Anr\.?\s*$", re.IGNORECASE),
-        re.compile(r"^\s*A\.?\s*[~Kk]?\.?\s*Gopalan\s+v\.?.*$", re.IGNORECASE),
-        re.compile(r"^\s*Province\s+of\s+Bombay\s+v\.?.*$", re.IGNORECASE),
-        re.compile(r"^\s*Ram\s+Krishna\s+Ramnath\s+Agarwal.*v\.?.*$", re.IGNORECASE),
-        re.compile(r"^\s*Bhawanip?ore\s+Banking\s+Cor.*$", re.IGNORECASE),
-        re.compile(r"^\s*S\.\s*Nagesh\s+v\.\s+Shobha.*$", re.IGNORECASE),
+        # Generalized legal case caption headers (e.g. "Party A v. Party B", "Party A vs. Party B", or trailing "Party A v.")
+        re.compile(r"^\s*[\w\s.,\'&()/-]+\s+(?:v\.?|vs\.?|versus)(?:\s+[\w\s.,\'&()/-]+)?$", re.IGNORECASE),
+        # Generalized multiple party suffixes in running headers (e.g. "... & Anr.", "... & Ors.")
+        re.compile(r"^\s*[\w\s.,\'()/-]+\s+&\s+(?:Anr|Ors)\.?\s*$", re.IGNORECASE),
+        # Generalized institutional / corporate party titles in running headers
+        re.compile(r"^\s*[\w\s.,\'()/-]+(?:Banking\s+Cor|Corp(?:oration)?|Co(?:mpany)?|Ltd|Limited)\.?\s*$", re.IGNORECASE),
+        # Generalized governmental / authority running headers (e.g. "STATE OF ...", "UNION OF INDIA")
+        re.compile(r"^\s*(?:STATE|UNION|COMMISSIONER|COLLECTOR|SECRETARY)\s+OF\s+[\w\s.,\'()/-]+$", re.IGNORECASE),
+    ]
+
+    # Substantive judicial body indicators that must NEVER be stripped as running headers
+    SUBSTANTIVE_BODY_PATTERNS = [
+        # Numbered paragraphs: e.g. "1.", "2.", "(1)", "[1]", "Para 1", "Paragraph 1"
+        re.compile(r"^\s*(?:\d{1,3}\.|\(\d{1,3}\)|\[\d{1,3}\]|para(?:graph)?\s+\d+)", re.IGNORECASE),
+        # Judicial section titles: "JUDGMENT", "ORDER", "OPINION", "PER CURIAM", "HEADNOTE", "DECISION"
+        re.compile(r"^\s*(?:JUDGMENT|ORDER|OPINION|PER\s+CURIAM|HEADNOTE|DECISION)\s*$", re.IGNORECASE),
+        # Judicial signatures / author designations: e.g. "SANJAY KUMAR, J.", "KANIA, C.J.", "[SANJAY KUMAR*, ALOK ARADHE JJ.]"
+        re.compile(r"\b[A-Z\s.,]+,\s*(?:C\.?J\.?|J\.?|JJ\.?)\b"),
+        # Direct dispositive legal orders
+        re.compile(r"\b(?:Leave\s+granted|Appeal\s+allowed|Petition\s+dismissed|Bail\s+granted|Stands\s+disposed|Ordered\s+accordingly|Result\s+of\s+the\s+case)\b", re.IGNORECASE),
+        # Substantive statutory sections or articles: "Section 138", "Article 21"
+        re.compile(r"\b(?:Section\s+\d+[A-Za-z]?|Article\s+\d+[A-Za-z]?|Clause\s+\d+)\b", re.IGNORECASE),
     ]
 
     INLINE_MARGIN_YEARS = re.compile(r"\b(?:I9l50|l950|ll950|19ll0|i980|1915\(\)|1960)\b", re.IGNORECASE)
@@ -130,15 +148,21 @@ class CoordinateZoneExtractor:
         d = page.get_text("dict")
         w, h = page.rect.width, page.rect.height
 
-        year = int(document_id.split("_")[0]) if document_id and document_id.split("_")[0].isdigit() else 2026
-        is_historical = bool(
-            ("1950" in document_id or "1951" in document_id or year < 1980) and
-            (w < 500 and h < 750)
-        )
-        is_born_digital = bool(
-            ("2026" in document_id or "INSC" in document_id or year >= 1990) or
-            (not is_historical and w > 450)
-        )
+        doc_year_m = re.search(r"(19\d\d|20\d\d)", document_id) if document_id else None
+        doc_year = int(doc_year_m.group(1)) if doc_year_m else None
+        
+        has_vector_fonts = bool(hasattr(page, "get_fonts") and len(page.get_fonts()) >= 1)
+        
+        # Algorithmic classification: 
+        # Supreme Court judgments prior to 1985 were physically printed volumes (historical scans).
+        # Modern judgments (post-1990) are born-digital.
+        if doc_year is not None:
+            is_historical = (doc_year < 1985)
+            is_born_digital = (doc_year >= 1990)
+        else:
+            is_born_digital = has_vector_fonts and (w >= 450)
+            is_historical = not is_born_digital
+        
         is_1950 = is_historical
 
         book_p = (start_book_page + page_number - 1) if start_book_page else page_number
@@ -174,14 +198,28 @@ class CoordinateZoneExtractor:
 
                 span_size = line["spans"][0].get("size", 10.0) if line["spans"] else 10.0
 
+                # Check if this line exhibits substantive legal body content (never a running header)
+                is_substantive = any(sp.search(txt) for sp in cls.SUBSTANTIVE_BODY_PATTERNS)
+
                 # Book Header Check (applies to ALL pages if in upper 25% of page)
                 is_book_hdr = (ly1 <= 120.0 and any(bp.search(txt) for bp in cls.BOOK_HEADER_PATTERNS))
                 is_stray_p1 = (page_number == 1 and ly1 <= 75.0 and bool(re.match(r"^[,\-–—;.'~`\s]+$", txt)))
 
                 # Top Header Check (pages >= 2)
-                is_hdr = is_book_hdr or is_stray_p1 or (
-                    page_number > 1 and (ly1 <= header_y_max or any(hp.search(txt) for hp in cls.HEADER_PATTERNS))
+                # A line on page >= 2 is a running header ONLY IF:
+                # 1. It is NOT substantive judicial body text, AND
+                # 2. It is within the upper margin (ly1 <= header_y_max), AND
+                # 3. It matches a known reporter pattern, case adversary pattern, or bare page number.
+                is_pattern_hdr = (
+                    page_number > 1
+                    and ly1 <= header_y_max
+                    and (
+                        any(hp.search(txt) for hp in cls.HEADER_PATTERNS)
+                        or bool(re.match(r"^\s*\d{1,4}\s*$", txt))
+                    )
                 )
+
+                is_hdr = not is_substantive and (is_book_hdr or is_stray_p1 or is_pattern_hdr)
                 if is_hdr:
                     pnum_m = re.search(r"\b(\d{1,4})\b", txt)
                     if pnum_m and not printed_pnum:
@@ -312,10 +350,36 @@ class CoordinateZoneExtractor:
 
         # Determine extraction method and actual OCR quality
         images = page.get_images() if hasattr(page, "get_images") else []
+        raw_text_val = page.get_text("text") if hasattr(page, "get_text") else ""
+        if isinstance(raw_text_val, str):
+            raw_text_full = raw_text_val.strip()
+        elif isinstance(raw_text_val, dict):
+            raw_text_full = " ".join(
+                s.get("text", "")
+                for b in raw_text_val.get("blocks", [])
+                for l in b.get("lines", [])
+                for s in l.get("spans", [])
+            ).strip()
+        else:
+            raw_text_full = ""
+        total_raw_chars = len(raw_text_full)
+
         if not cleaned_body:
             if images:
                 ext_method = "image_only_pending_ocr"
                 ocr_q = 0.0
+            elif total_raw_chars > 0:
+                # Raw text existed on the page, but zone/coordinate filtering stripped it!
+                # Under NO circumstances should this be classified as 'verified_blank'.
+                # Safety fallback: rescue raw text so substantive legal words are NEVER lost.
+                logger.warning(
+                    "Page %d has %d raw characters but cleaned_body is empty. "
+                    "Activating raw-text recovery fallback to prevent silent data loss.",
+                    page_number, total_raw_chars
+                )
+                cleaned_body = raw_text_full.strip()
+                ext_method = "pymupdf_fallback"
+                ocr_q = calculate_ocr_quality(cleaned_body, is_born_digital=is_born_digital)
             else:
                 ext_method = "verified_blank"
                 ocr_q = 1.0

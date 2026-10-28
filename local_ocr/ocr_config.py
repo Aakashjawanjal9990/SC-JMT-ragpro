@@ -7,7 +7,7 @@ Does not perform large model downloads on import.
 import os
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Set, Optional
+from typing import Set
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 import fitz  # PyMuPDF
 
 from local_ocr.ocr_config import ocr_config, LocalOCRConfig
-from parsing.zone_extractor import CoordinateZoneExtractor, calculate_ocr_quality
+from parsing.zone_extractor import CoordinateZoneExtractor
 
 
 class PageRoutingDecision(str, Enum):
@@ -197,10 +197,20 @@ class LocalOCRRouter:
 
         # -------------------------------------------------------------
         # RULE 1: Genuinely Blank Page
+        # A page is genuinely blank ONLY IF both raw chars == 0 AND clean chars == 0,
+        # with zero images and negligible drawings.
         # -------------------------------------------------------------
-        if total_clean_chars == 0 and image_count == 0 and drawing_count <= 2:
+        if total_raw_chars == 0 and total_clean_chars == 0 and image_count == 0 and drawing_count <= 2:
             decision = PageRoutingDecision.SKIP_BLANK
             reasons.append("genuinely_blank_page_no_text_or_images")
+
+        # -------------------------------------------------------------
+        # RULE 1B: Rescued Raw-Text Anomaly
+        # If clean text was empty but raw text exists and no images, preserve native text
+        # -------------------------------------------------------------
+        elif total_clean_chars == 0 and total_raw_chars > 0 and image_count == 0:
+            decision = PageRoutingDecision.SKIP_NATIVE_OK
+            reasons.append(f"rescued_raw_text_page (raw_chars={total_raw_chars})")
 
         # -------------------------------------------------------------
         # RULE 2: Empty Native Text with Visible Content (Scanned Page)
