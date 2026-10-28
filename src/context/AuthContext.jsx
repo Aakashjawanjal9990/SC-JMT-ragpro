@@ -15,64 +15,137 @@ export const useAuth = () => useContext(AuthContext);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState('');
 
-  // Ends the session on the server (which clears the cookie), then here.
+  const refreshSession = useCallback(async () => {
+    setLoading(true);
+    setAuthError('');
+
+    try {
+      const currentUser = await api.me();
+      setUser(currentUser);
+    } catch (error) {
+      if (error?.status === 401) {
+        setUser(null);
+      } else {
+        setAuthError(
+          error?.message || 'Unable to check your session. Please try again.',
+        );
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await api.logout();
     } catch {
-      // Nothing more to do: sign out on this page regardless.
+      // Clear local UI state even if the server is unreachable.
     }
+
     setUser(null);
+    setAuthError('');
   }, []);
 
-  // The session cookie is HttpOnly, so the page cannot tell whether it is
-  // signed in. Ask the server who it is on every page load.
   useEffect(() => {
-    api
-      .me()
-      .catch(() => null)
-      .then(setUser)
-      .finally(() => setLoading(false));
+    let active = true;
+
+    async function bootstrap() {
+      setLoading(true);
+      setAuthError('');
+
+      try {
+        const currentUser = await api.me();
+
+        if (active) {
+          setUser(currentUser);
+        }
+      } catch (error) {
+        if (!active) return;
+
+        if (error?.status === 401) {
+          setUser(null);
+        } else {
+          setAuthError(
+            error?.message || 'Unable to check your session. Please try again.',
+          );
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+
+    bootstrap();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  // A 401 on any other call means the session ended on the server.
   useEffect(() => {
-    const clear = () => setUser(null);
-    window.addEventListener('nm:unauthorized', clear);
-    return () => window.removeEventListener('nm:unauthorized', clear);
+    const handleUnauthorized = () => {
+      setUser(null);
+      setAuthError('');
+    };
+
+    window.addEventListener('nm:unauthorized', handleUnauthorized);
+
+    return () => {
+      window.removeEventListener('nm:unauthorized', handleUnauthorized);
+    };
   }, []);
 
-  // By now the backend has set the session cookie. Use the user in the reply
-  // or, when there is none, ask /auth/me so Home can render.
-  const accept = useCallback(async (res) => {
-    setUser(res?.user || (await api.me()));
+  const accept = useCallback(async (response) => {
+    const nextUser = response?.user || (await api.me());
+
+    setUser(nextUser);
+    setAuthError('');
   }, []);
 
   const login = useCallback(
-    async (email, password, remember) =>
-      accept(await api.login(email, password, remember)),
+    async (email, password, remember) => {
+      await accept(await api.login(email, password, remember));
+    },
     [accept],
   );
-  // The backend either signs the person in at once or asks for email
-  // verification first ({verificationRequired: true}).
+
   const register = useCallback(
     async (payload) => {
-      const res = await api.register(payload);
-      if (res?.verificationRequired) return { verified: false };
-      await accept(res);
+      const response = await api.register(payload);
+
+      if (response?.verificationRequired) {
+        return { verified: false };
+      }
+
+      await accept(response);
       return { verified: true };
     },
     [accept],
   );
+
   const verify = useCallback(
-    async (email, code) => accept(await api.verify(email, code)),
+    async (email, code) => {
+      await accept(await api.verify(email, code));
+    },
     [accept],
   );
 
   const value = useMemo(
-    () => ({ user, loading, login, register, verify, logout }),
-    [user, loading, login, register, verify, logout],
+    () => ({
+      user,
+      loading,
+      authError,
+      refreshSession,
+      login,
+      register,
+      verify,
+      logout,
+    }),
+    [user, loading, authError, refreshSession, login, register, verify, logout],
   );
+
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

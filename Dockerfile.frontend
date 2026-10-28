@@ -12,7 +12,7 @@ COPY src/ ./src/
 ARG VITE_API_URL
 ENV VITE_API_URL=${VITE_API_URL}
 
-RUN npm run build && node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; const apiUrl = new URL(process.env.VITE_API_URL); if (apiUrl.protocol !== 'https:' || apiUrl.username || apiUrl.password) throw new Error('VITE_API_URL must be an HTTPS URL without embedded credentials'); const configPath = '/frontend/nginx.frontend.conf'; const config = readFileSync(configPath, 'utf8'); if (!config.includes('__API_ORIGIN__')) throw new Error('CSP API-origin placeholder is missing'); writeFileSync(configPath, config.replaceAll('__API_ORIGIN__', apiUrl.origin));"
+RUN npm run build && node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; const apiUrl = new URL(process.env.VITE_API_URL); if (apiUrl.protocol !== 'https:' || apiUrl.username || apiUrl.password || apiUrl.search || apiUrl.hash || apiUrl.pathname.replace(/\/+$/, '') !== '/api') throw new Error('VITE_API_URL must be HTTPS, contain no credentials/query/fragment, and end with /api'); const configPath = '/frontend/nginx.frontend.conf'; const config = readFileSync(configPath, 'utf8'); if (!config.includes('__API_ORIGIN__')) throw new Error('CSP API-origin placeholder is missing'); writeFileSync(configPath, config.replaceAll('__API_ORIGIN__', apiUrl.origin));"
 
 FROM nginx:alpine AS runtime
 

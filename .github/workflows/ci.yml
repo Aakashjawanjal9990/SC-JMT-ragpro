@@ -1,4 +1,5 @@
 name: CI
+
 on:
   push:
   pull_request:
@@ -6,17 +7,25 @@ on:
 jobs:
   frontend:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+
       - run: npm ci
+
+      - run: npm run test
+
       - run: npm run lint -- --max-warnings 0
+
       - run: npm run format:check
+
       - run: npm audit --audit-level=high
+
       - run: npm run build
         env:
-          # Placeholder so the production-build guard passes in CI.
           VITE_API_URL: https://api.example.com/api

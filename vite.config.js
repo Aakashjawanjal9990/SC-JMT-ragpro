@@ -1,13 +1,15 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import { validateProductionApiUrl } from './src/lib/apiUrl.js';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
-  // A production bundle must never fall back to localhost or plain http.
-  if (mode === 'production' && !/^https:\/\/.+/.test(env.VITE_API_URL || '')) {
-    throw new Error(
-      'VITE_API_URL must be set to an https:// URL for a production build.',
-    );
+
+  if (mode === 'production') {
+    validateProductionApiUrl(env.VITE_API_URL);
   }
-  return { plugins: [react()] };
+
+  return {
+    plugins: [react()],
+  };
 });
