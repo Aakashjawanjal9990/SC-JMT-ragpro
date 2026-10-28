@@ -19,3 +19,4 @@ dist/
 docs/
 test_server_cookies.py
 test_server.py
+.github/
