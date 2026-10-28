@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from app.models import (
     Citation,
+    ConversationTurn,
     EvidenceInput,
     QueryRequest,
     QueryResponse,
@@ -31,10 +32,18 @@ class QueryOrchestrator:
         self._answer_generation = answer_generation
         self._max_context_chars = max_context_chars
 
-    async def answer(self, request: QueryRequest, request_id: str | None = None) -> QueryResponse:
+    async def answer(
+        self,
+        request: QueryRequest,
+        request_id: str | None = None,
+        *,
+        retrieval_question: str | None = None,
+        think: bool = False,
+        conversation_history: Sequence[ConversationTurn] = (),
+    ) -> QueryResponse:
         request_id = request_id or str(uuid4())
         candidates = await self._retrieval.retrieve(
-            question=request.question,
+            question=retrieval_question or request.question,
             filters=request.filters,
             limit=request.options.max_sources,
         )
@@ -50,7 +59,12 @@ class QueryOrchestrator:
         passages_by_id = {
             item.evidence_id: passage for item, passage in zip(evidence, usable, strict=True)
         }
-        generated = await self._answer_generation.generate(request.question, evidence)
+        generated = await self._answer_generation.generate(
+            request.question,
+            evidence,
+            think=think,
+            conversation_history=conversation_history,
+        )
         if not generated.answer.strip():
             return self._insufficient(request_id, "The answer generator returned no answer text.")
         cited_ids = list(dict.fromkeys(generated.evidence_ids))
@@ -144,9 +158,7 @@ class QueryOrchestrator:
         return selected
 
     @staticmethod
-    def _records_match(
-        passage: RetrievedPassage, record: ResolvedEvidence
-    ) -> bool:
+    def _records_match(passage: RetrievedPassage, record: ResolvedEvidence) -> bool:
         return (
             passage.chunk_id == record.chunk_id
             and passage.document_id == record.document_id

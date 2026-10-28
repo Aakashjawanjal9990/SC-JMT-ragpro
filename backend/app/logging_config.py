@@ -3,9 +3,8 @@
 import json
 import logging
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
-
 
 request_id_context: ContextVar[str] = ContextVar("request_id", default="-")
 
@@ -17,14 +16,25 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
-            "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+            "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
             "request_id": getattr(record, "request_id", request_id_context.get()),
             "environment": self.environment,
         }
-        for field in ("method", "path", "status_code", "duration_ms", "exception_type"):
+        for field in (
+            "method",
+            "path",
+            "status_code",
+            "duration_ms",
+            "exception_type",
+            "security_event",
+            "outcome",
+            "subject_hash",
+            "client_ip",
+            "deleted_records",
+        ):
             value = getattr(record, field, None)
             if value is not None:
                 payload[field] = value

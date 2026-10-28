@@ -107,9 +107,7 @@ class BM25Index:
             mask[indices[indptr[t] : indptr[t + 1]]] = True
         return mask
 
-    def search(
-        self, query: str, k: int, filters: Filters | None = None
-    ) -> list[tuple[str, float]]:
+    def search(self, query: str, k: int, filters: Filters | None = None) -> list[tuple[str, float]]:
         """Top-k (chunk_id, score) among chunks sharing a term with the query."""
         token_ids = sorted({self._vocab[t] for t in tokenize(query) if t in self._vocab})
         if not token_ids or k <= 0:
@@ -120,7 +118,9 @@ class BM25Index:
             # Fast path: only consider rows of the filtered judgments.
             wanted = [doc_filter] if isinstance(doc_filter, str) else doc_filter
             allowed = np.unique(
-                np.asarray([r for d in wanted for r in self._rows_by_doc.get(d, ())], dtype=np.int64)
+                np.asarray(
+                    [r for d in wanted for r in self._rows_by_doc.get(d, ())], dtype=np.int64
+                )
             )
             rows = allowed[mask[allowed]]
         else:
@@ -186,4 +186,3 @@ class BM25Index:
             metadata = [json.loads(line) for line in handle]
         logger.info("Loaded BM25 index with %d chunks from %s", len(chunk_ids), path)
         return cls(model, chunk_ids, metadata, manifest["method"])
-

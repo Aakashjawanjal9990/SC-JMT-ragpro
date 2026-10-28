@@ -155,4 +155,3 @@ class Database:
         self.engine.dispose()
         if self._connector is not None:
             self._connector.close()
-

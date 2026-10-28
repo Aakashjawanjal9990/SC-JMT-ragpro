@@ -17,6 +17,7 @@ class Settings:
     redis_url: str | None = None
     auth_challenge_secret: str | None = None
     session_cookie_name: str = "nm_session"
+    admin_session_cookie_name: str = "nm_admin_session"
     session_cookie_samesite: str = "lax"
     smtp_host: str | None = None
     smtp_port: int = 587
@@ -33,6 +34,10 @@ class Settings:
     vertex_embedding_model_id: str | None = None
     rate_limit_requests: int = 30
     rate_limit_window_seconds: int = 60
+    auth_identity_rate_limit_requests: int = 8
+    auth_identity_rate_limit_window_seconds: int = 900
+    max_request_body_bytes: int = 1_048_576
+    chat_retention_days: int = 365
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -46,9 +51,7 @@ class Settings:
         raw_origins = os.getenv("CORS_ORIGINS", "")
         origins = tuple(
             dict.fromkeys(
-                origin.strip().rstrip("/")
-                for origin in raw_origins.split(",")
-                if origin.strip()
+                origin.strip().rstrip("/") for origin in raw_origins.split(",") if origin.strip()
             )
         )
         for origin in origins:
@@ -97,19 +100,47 @@ class Settings:
         if not 1 <= rate_limit_window_seconds <= 3600:
             raise ValueError("RATE_LIMIT_WINDOW_SECONDS must be between 1 and 3600.")
 
+        try:
+            auth_identity_rate_limit_requests = int(
+                os.getenv("AUTH_IDENTITY_RATE_LIMIT_REQUESTS", "8")
+            )
+            auth_identity_rate_limit_window_seconds = int(
+                os.getenv("AUTH_IDENTITY_RATE_LIMIT_WINDOW_SECONDS", "900")
+            )
+            max_request_body_bytes = int(os.getenv("MAX_REQUEST_BODY_BYTES", "1048576"))
+            chat_retention_days = int(os.getenv("CHAT_RETENTION_DAYS", "365"))
+        except ValueError as exc:
+            raise ValueError("Security limit and retention settings must be integers.") from exc
+        if not 1 <= auth_identity_rate_limit_requests <= 100:
+            raise ValueError("AUTH_IDENTITY_RATE_LIMIT_REQUESTS must be between 1 and 100.")
+        if not 60 <= auth_identity_rate_limit_window_seconds <= 86400:
+            raise ValueError(
+                "AUTH_IDENTITY_RATE_LIMIT_WINDOW_SECONDS must be between 60 and 86400."
+            )
+        if not 1024 <= max_request_body_bytes <= 16_777_216:
+            raise ValueError("MAX_REQUEST_BODY_BYTES must be between 1024 and 16777216.")
+        if not 1 <= chat_retention_days <= 3650:
+            raise ValueError("CHAT_RETENTION_DAYS must be between 1 and 3650.")
+
         database_url = os.getenv("DATABASE_URL") or None
         redis_url = os.getenv("REDIS_URL") or None
         auth_challenge_secret = os.getenv("AUTH_CHALLENGE_SECRET") or None
         session_cookie_name = os.getenv("SESSION_COOKIE_NAME", "nm_session").strip()
+        admin_session_cookie_name = os.getenv(
+            "ADMIN_SESSION_COOKIE_NAME", "nm_admin_session"
+        ).strip()
         session_cookie_samesite = os.getenv("SESSION_COOKIE_SAMESITE", "lax").strip().lower()
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", session_cookie_name):
             raise ValueError("SESSION_COOKIE_NAME must contain only letters, numbers, '_' or '-'.")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", admin_session_cookie_name):
+            raise ValueError(
+                "ADMIN_SESSION_COOKIE_NAME must contain only letters, numbers, '_' or '-'."
+            )
+        if admin_session_cookie_name == session_cookie_name:
+            raise ValueError("Admin and user session cookie names must be different.")
         if session_cookie_samesite not in {"lax", "strict", "none"}:
             raise ValueError("SESSION_COOKIE_SAMESITE must be Lax, Strict, or None.")
-        if (
-            session_cookie_samesite == "none"
-            and environment.lower() in {"development", "test"}
-        ):
+        if session_cookie_samesite == "none" and environment.lower() in {"development", "test"}:
             raise ValueError(
                 "SESSION_COOKIE_SAMESITE=None requires HTTPS; use Lax for local HTTP development."
             )
@@ -160,13 +191,10 @@ class Settings:
                 )
             ]
             if missing:
-                raise ValueError(
-                    "Production configuration is incomplete: " + ", ".join(missing)
-                )
+                raise ValueError("Production configuration is incomplete: " + ", ".join(missing))
             if placeholders:
                 raise ValueError(
-                    "Replace deployment placeholders before production: "
-                    + ", ".join(placeholders)
+                    "Replace deployment placeholders before production: " + ", ".join(placeholders)
                 )
             if not database_url.startswith("postgresql"):
                 raise ValueError("Production DATABASE_URL must use PostgreSQL.")
@@ -187,6 +215,7 @@ class Settings:
             redis_url=redis_url,
             auth_challenge_secret=auth_challenge_secret,
             session_cookie_name=session_cookie_name,
+            admin_session_cookie_name=admin_session_cookie_name,
             session_cookie_samesite=session_cookie_samesite,
             smtp_host=smtp_host,
             smtp_port=smtp_port,
@@ -203,4 +232,8 @@ class Settings:
             vertex_embedding_model_id=vertex_embedding_model_id,
             rate_limit_requests=rate_limit_requests,
             rate_limit_window_seconds=rate_limit_window_seconds,
+            auth_identity_rate_limit_requests=auth_identity_rate_limit_requests,
+            auth_identity_rate_limit_window_seconds=auth_identity_rate_limit_window_seconds,
+            max_request_body_bytes=max_request_body_bytes,
+            chat_retention_days=chat_retention_days,
         )

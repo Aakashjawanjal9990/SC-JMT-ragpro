@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from app.models import (
+    ConversationTurn,
     EvidenceInput,
     GeneratedAnswer,
     QueryFilters,
@@ -26,7 +27,12 @@ class SourceRecordPort(Protocol):
 
 class AnswerGenerationPort(Protocol):
     async def generate(
-        self, question: str, evidence: Sequence[EvidenceInput]
+        self,
+        question: str,
+        evidence: Sequence[EvidenceInput],
+        *,
+        think: bool = False,
+        conversation_history: Sequence[ConversationTurn] = (),
     ) -> GeneratedAnswer: ...
 
 
@@ -62,6 +68,11 @@ class UnconfiguredSourceRecords:
 
 class UnconfiguredAnswerGeneration:
     async def generate(
-        self, question: str, evidence: Sequence[EvidenceInput]
+        self,
+        question: str,
+        evidence: Sequence[EvidenceInput],
+        *,
+        think: bool = False,
+        conversation_history: Sequence[ConversationTurn] = (),
     ) -> GeneratedAnswer:
         raise AdapterNotConfigured("Answer-generation adapter is not configured")

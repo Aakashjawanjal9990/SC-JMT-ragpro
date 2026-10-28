@@ -37,12 +37,24 @@ services:
     build: .
     env_file: .env
     environment:
+      APP_ENV: ${APP_ENV:-development}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:5174,http://localhost:3000}
+      LOCAL_TEST_MODE: ${LOCAL_TEST_MODE:-false}
       DATABASE_URL: postgresql+asyncpg://rag:rag@postgres:5432/rag
       REDIS_URL: redis://redis:6379/0
       SMTP_HOST: mailpit
       SMTP_PORT: 1025
       SMTP_FROM_EMAIL: no-reply@localhost
       SMTP_STARTTLS: "false"
+      RETRIEVAL_PORT_ADAPTER_ENABLED: ${RETRIEVAL_PORT_ADAPTER_ENABLED:-false}
+      RETRIEVAL_VECTOR_STORE: ${RETRIEVAL_VECTOR_STORE:-pgvector}
+      RETRIEVAL_SQLITE_PATH: ${RETRIEVAL_SQLITE_PATH:-/data/scj_rag_v2.db}
+      RETRIEVAL_EMBEDDING_MODEL: ${RETRIEVAL_EMBEDDING_MODEL:-text-embedding-004}
+      RETRIEVAL_EMBEDDING_PROVIDER: ${RETRIEVAL_EMBEDDING_PROVIDER:-vertex}
+      RETRIEVAL_EMBEDDING_DIMENSIONS: ${RETRIEVAL_EMBEDDING_DIMENSIONS:-768}
+      RETRIEVAL_BM25_BACKEND: ${RETRIEVAL_BM25_BACKEND:-none}
+    volumes:
+      - ${RAG_SQLITE_PATH:-../ingestion/output/scj_rag_v2.db}:/data/scj_rag_v2.db:ro
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

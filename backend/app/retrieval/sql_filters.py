@@ -29,9 +29,11 @@ def filters_to_sql(
         if key not in columns:
             raise UnsupportedFilterError(key)
         column, sql_type = columns[key]
-        conditions = condition if isinstance(condition, Mapping) else {
-            "in" if isinstance(condition, (list, tuple, set, frozenset)) else "eq": condition
-        }
+        conditions = (
+            condition
+            if isinstance(condition, Mapping)
+            else {"in" if isinstance(condition, (list, tuple, set, frozenset)) else "eq": condition}
+        )
         for operator, value in conditions.items():
             if operator == "in":
                 values = [str(v) for v in value]
@@ -43,4 +45,3 @@ def filters_to_sql(
             else:
                 raise UnsupportedFilterError(f"{key}.{operator}")
     return "".join(f" AND {clause}" for clause in clauses), params
-

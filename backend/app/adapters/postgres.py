@@ -25,9 +25,7 @@ from app.ports import (
 class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
     """Search live ``chunks`` and verify citations against stored source records."""
 
-    def __init__(
-        self, engine: AsyncEngine, embedder: QueryEmbeddingPort
-    ) -> None:
+    def __init__(self, engine: AsyncEngine, embedder: QueryEmbeddingPort) -> None:
         self._engine = engine
         self._embedder = embedder
 
@@ -133,19 +131,23 @@ class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
         try:
             async with self._engine.connect() as connection:
                 rows = (
-                    await connection.execute(
-                        query,
-                        {
-                            "question": question,
-                            "query_embedding": "[" + ",".join(map(str, query_embedding)) + "]",
-                            "date_from": filters.date_from,
-                            "date_to": filters.date_to,
-                            "document_ids": document_ids,
-                            "candidate_limit": max(limit * 10, 100),
-                            "limit": limit,
-                        },
+                    (
+                        await connection.execute(
+                            query,
+                            {
+                                "question": question,
+                                "query_embedding": "[" + ",".join(map(str, query_embedding)) + "]",
+                                "date_from": filters.date_from,
+                                "date_to": filters.date_to,
+                                "document_ids": document_ids,
+                                "candidate_limit": max(limit * 10, 100),
+                                "limit": limit,
+                            },
+                        )
                     )
-                ).mappings().all()
+                    .mappings()
+                    .all()
+                )
         except SQLAlchemyError as exc:
             raise DependencyUnavailable("PostgreSQL retrieval query failed.") from exc
         return [
@@ -224,9 +226,7 @@ class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
         )
         try:
             async with self._engine.connect() as connection:
-                rows = (
-                    await connection.execute(query, identity_params)
-                ).mappings().all()
+                rows = (await connection.execute(query, identity_params)).mappings().all()
         except SQLAlchemyError as exc:
             raise DependencyUnavailable("PostgreSQL source resolution failed.") from exc
         return [

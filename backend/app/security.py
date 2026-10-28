@@ -76,7 +76,12 @@ class OIDCVerifier:
 async def require_authenticated_user(request: Request) -> AuthenticatedUser:
     """Validate an HttpOnly app-session cookie or configured OIDC bearer token."""
     settings = request.app.state.settings
-    cookie_token = request.cookies.get(settings.session_cookie_name)
+    cookie_name = (
+        settings.admin_session_cookie_name
+        if request.url.path.startswith("/api/admin/")
+        else settings.session_cookie_name
+    )
+    cookie_token = request.cookies.get(cookie_name)
 
     if cookie_token:
         auth_service = getattr(request.app.state, "auth_service", None)
@@ -112,7 +117,9 @@ async def require_authenticated_user(request: Request) -> AuthenticatedUser:
         try:
             user = await auth_service.authenticate(bearer_token.strip())
         except Exception as exc:
-            raise HTTPException(status_code=503, detail="Authentication is temporarily unavailable.") from exc
+            raise HTTPException(
+                status_code=503, detail="Authentication is temporarily unavailable."
+            ) from exc
         if user is not None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

@@ -9,9 +9,78 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.logging_config import request_id_context
 
-
 logger = logging.getLogger("supreme_court_rag.http")
 _VALID_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+class RequestBodyLimitMiddleware:
+    """Reject oversized HTTP bodies before FastAPI parses or buffers them."""
+
+    def __init__(self, app: ASGIApp, max_body_bytes: int) -> None:
+        self.app = app
+        self.max_body_bytes = max_body_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        content_lengths = [
+            value for name, value in scope.get("headers", []) if name.lower() == b"content-length"
+        ]
+        if content_lengths:
+            try:
+                declared_length = int(content_lengths[0])
+            except ValueError:
+                await self._reject(send, 400, b'{"detail":"Invalid Content-Length."}')
+                return
+            if declared_length < 0 or declared_length > self.max_body_bytes:
+                await self._reject(send, 413, b'{"detail":"Request body is too large."}')
+                return
+
+        body_parts: list[bytes] = []
+        body_size = 0
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            if message["type"] != "http.request":
+                continue
+            part = message.get("body", b"")
+            body_size += len(part)
+            if body_size > self.max_body_bytes:
+                await self._reject(send, 413, b'{"detail":"Request body is too large."}')
+                return
+            body_parts.append(part)
+            if not message.get("more_body", False):
+                break
+
+        buffered_body = b"".join(body_parts)
+        delivered = False
+
+        async def replay_receive() -> Message:
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": buffered_body, "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
+
+    @staticmethod
+    async def _reject(send: Send, status_code: int, body: bytes) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status_code,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                    (b"cache-control", b"no-store"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
 
 
 class RequestLoggingMiddleware:

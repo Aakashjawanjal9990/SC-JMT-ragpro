@@ -124,9 +124,7 @@ def upgrade() -> None:
         normalized = statement.lstrip().upper()
         # pg_dump session configuration is version-specific and is not part of
         # the schema. In particular, pg_dump 17 emits a SET unsupported by PG16.
-        if normalized.startswith("SET ") or normalized.startswith(
-            "SELECT PG_CATALOG.SET_CONFIG("
-        ):
+        if normalized.startswith("SET ") or normalized.startswith("SELECT PG_CATALOG.SET_CONFIG("):
             continue
         # psql's \restrict markers are removed from the checked-in snapshot.
         if statement.lstrip().startswith("\\"):

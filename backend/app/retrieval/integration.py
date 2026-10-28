@@ -1,7 +1,8 @@
 """Build the optional retrieval port adapter from the backend's configuration."""
 
+from collections.abc import Callable
 from dataclasses import replace
-from typing import Any, Callable
+from typing import Any
 
 from sqlalchemy.engine import make_url
 
@@ -19,7 +20,7 @@ def create_backend_retrieval_adapter(
     separate AlloyDB BM25 deployment, so the adapter defaults to dense retrieval.
     """
     settings = RetrievalSettings.from_environment()
-    if not settings.source_db.configured:
+    if settings.vector_store == "pgvector" and not settings.source_db.configured:
         if not database_url:
             raise ValueError("DATABASE_URL is required for retrieval.")
         url = make_url(database_url)

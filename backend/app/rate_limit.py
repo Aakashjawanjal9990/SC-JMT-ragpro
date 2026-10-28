@@ -32,10 +32,19 @@ return {1, 0}
 
 
 class RedisRateLimiter:
-    def __init__(self, redis: Redis, settings: Settings) -> None:
+    def __init__(
+        self,
+        redis: Redis,
+        settings: Settings,
+        *,
+        limit: int | None = None,
+        window_seconds: int | None = None,
+        key_prefix: str = "api:rate-limit",
+    ) -> None:
         self._redis = redis
-        self._limit = settings.rate_limit_requests
-        self._window = settings.rate_limit_window_seconds
+        self._limit = limit or settings.rate_limit_requests
+        self._window = window_seconds or settings.rate_limit_window_seconds
+        self._key_prefix = key_prefix
 
     async def check(self, subject: str) -> None:
         subject_key = hashlib.sha256(subject.encode("utf-8")).hexdigest()
@@ -44,7 +53,7 @@ class RedisRateLimiter:
             allowed, retry_after = await self._redis.eval(
                 _SLIDING_WINDOW_SCRIPT,
                 1,
-                f"api:rate-limit:{subject_key}",
+                f"{self._key_prefix}:{subject_key}",
                 self._window,
                 self._limit,
                 unique_request,

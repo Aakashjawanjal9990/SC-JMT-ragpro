@@ -54,4 +54,3 @@ class RetrievalFailure(RetrievalError):
     code = "RETRIEVAL_FAILED"
     status_code = 503
     retryable = True
-

@@ -59,4 +59,3 @@ def matches(metadata: Mapping[str, Any], filters: Filters | None) -> bool:
         elif not _check("eq", stored, condition):
             return False
     return True
-

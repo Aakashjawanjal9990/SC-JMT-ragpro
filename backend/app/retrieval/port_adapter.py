@@ -8,12 +8,12 @@ with a validated `QueryFilters` and expects `RetrievedPassage` objects back. Pas
     app = create_app(retrieval=retrieval, ...)
 
 Contract enforced here:
-- Supported filters: date_from / date_to (judgment decision date, inclusive) and
-  document_ids (judgment UUIDs). Anything else set, including case_name, raises
+- Supported filter: document_ids (judgment UUIDs). Anything else set, including
+  case_name and date_from/date_to (no judgment date exists in the database), raises
   UnsupportedFilterError; filters are never silently dropped.
 - At most `limit` passages, best first, with a finite score and rank 1..n.
-- Only citable chunks: active, current source version, source file of the same
-  judgment, valid UUIDs, non-empty text that fits the passage model, and a valid
+- Only citable chunks: active (chunks.is_active), valid UUIDs, non-empty text that fits the passage
+  model, and a valid
   one-based page_start..page_end range. Text is returned exactly as stored.
 - No candidates -> empty list. Candidates that all fail integrity checks ->
   RetrievalFailure (a data problem, not an empty result). Deadline exceeded ->
@@ -25,7 +25,6 @@ import logging
 import math
 import uuid
 from collections.abc import Callable, Sequence
-from datetime import date
 from typing import Any
 
 from app.retrieval.config import RetrievalSettings
@@ -39,7 +38,6 @@ from app.retrieval.errors import (
 from app.retrieval.filters import Filters
 from app.retrieval.hybrid import HybridRetriever, RetrievalResult
 from app.retrieval.models import (
-    DECISION_DATE,
     DOCUMENT_ID,
     SOURCE_PDF_ID,
     RetrievedChunk,
@@ -49,9 +47,10 @@ from app.retrieval.models import (
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_FILTERS = frozenset({"date_from", "date_to", "document_ids"})
+# Only judgment ids can be filtered: the database has no judgment-date column, so
+# date_from/date_to are rejected like any other unsupported field.
+SUPPORTED_FILTERS = frozenset({"document_ids"})
 MAX_PASSAGE_CHARS = 20_000  # RetrievedPassage.text max_length
-MAX_PAGES = 100  # RetrievedPassage.original_page_numbers max_length
 
 
 def _set_filter_fields(filters: Any) -> dict[str, Any]:
@@ -80,15 +79,6 @@ def filters_from_query(filters: Any) -> Filters:
             raise UnsupportedFilterError(name)
 
     spec: dict[str, Any] = {}
-    date_range: dict[str, str] = {}
-    for name, operator in (("date_from", "gte"), ("date_to", "lte")):
-        if name in values:
-            if not isinstance(values[name], date):
-                raise InvalidFilterValueError(name)
-            date_range[operator] = values[name].isoformat()
-    if date_range:
-        spec[DECISION_DATE] = date_range
-
     if "document_ids" in values:
         ids = [_canonical_uuid(value) for value in values["document_ids"]]
         if any(value is None for value in ids):
@@ -97,12 +87,20 @@ def filters_from_query(filters: Any) -> Filters:
     return spec
 
 
-def passage_fields(chunk: RetrievedChunk, rank: int) -> dict[str, Any] | None:
+def _identifier(value: Any, require_uuid: bool) -> str | None:
+    if require_uuid:
+        return _canonical_uuid(value)
+    return str(value) if value not in (None, "") else None
+
+
+def passage_fields(
+    chunk: RetrievedChunk, rank: int, require_uuids: bool = True
+) -> dict[str, Any] | None:
     """RetrievedPassage fields for a citable chunk, or None if it is not citable."""
     metadata = chunk.metadata
-    chunk_id = _canonical_uuid(chunk.id)
-    document_id = _canonical_uuid(metadata.get(DOCUMENT_ID))
-    source_pdf_id = _canonical_uuid(metadata.get(SOURCE_PDF_ID))
+    chunk_id = _identifier(chunk.id, require_uuids)
+    document_id = _identifier(metadata.get(DOCUMENT_ID), require_uuids)
+    source_pdf_id = _identifier(metadata.get(SOURCE_PDF_ID), require_uuids)
     pages = page_range(metadata)
     if (
         chunk_id is None
@@ -110,7 +108,6 @@ def passage_fields(chunk: RetrievedChunk, rank: int) -> dict[str, Any] | None:
         or source_pdf_id is None
         or not is_citable(metadata)
         or pages is None
-        or len(pages) > MAX_PAGES
         or not chunk.text
         or len(chunk.text) > MAX_PASSAGE_CHARS
     ):
@@ -132,10 +129,12 @@ class RetrievalPortAdapter:
         retriever: HybridRetriever,
         passage_factory: Callable[..., Any] = dict,
         timeout_seconds: float | None = 10.0,
+        require_uuids: bool = True,
     ) -> None:
         self._retriever = retriever
         self._passage_factory = passage_factory
         self._timeout_seconds = timeout_seconds
+        self._require_uuids = require_uuids
 
     @classmethod
     def from_settings(
@@ -146,6 +145,7 @@ class RetrievalPortAdapter:
             HybridRetriever.from_settings(settings),
             passage_factory,
             timeout_seconds=settings.timeout_seconds,
+            require_uuids=settings.require_uuids,
         )
 
     def warmup(self) -> None:
@@ -157,12 +157,8 @@ class RetrievalPortAdapter:
         """Release database connections; call on application shutdown."""
         self._retriever.close()
 
-    async def healthcheck(self) -> bool:
-        """Check source/BM25 database connections for the backend readiness probe."""
-        try:
-            return await asyncio.to_thread(self._retriever.healthcheck)
-        except Exception:
-            return False
+    def healthcheck(self) -> bool:
+        return self._retriever.healthcheck()
 
     async def retrieve(self, question: str, filters: Any, limit: int) -> Sequence[Any]:
         spec = filters_from_query(filters)
@@ -177,20 +173,21 @@ class RetrievalPortAdapter:
             )
         except RetrievalError:
             raise
-        except (asyncio.TimeoutError, TimeoutError) as exc:
+        except TimeoutError as exc:
             raise RetrievalTimeoutError("Retrieval exceeded its deadline") from exc
         except Exception as exc:
             raise RetrievalFailure("Retrieval dependency failed") from exc
 
         # Stage timings only; the question and passage text are never logged.
-        logger.debug("Retrieval mode=%s timings_ms=%s", result.mode, result.timings_ms)
-        return passages_from_result(result, limit, self._passage_factory)
+        logger.debug("Retrieval timings_ms=%s", result.timings_ms)
+        return passages_from_result(result, limit, self._passage_factory, self._require_uuids)
 
 
 def passages_from_result(
     result: RetrievalResult,
     limit: int,
     passage_factory: Callable[..., Any] = dict,
+    require_uuids: bool = True,
 ) -> list[Any]:
     """Convert RetrievalResult.chunks into the backend's RetrievedPassage format:
     chunk_id, document_id, source_pdf_id (UUIDs), exact text, original_page_numbers
@@ -206,7 +203,7 @@ def passages_from_result(
     for chunk in result.chunks:
         if len(passages) == limit:
             break
-        fields = passage_fields(chunk, rank=len(passages) + 1)
+        fields = passage_fields(chunk, rank=len(passages) + 1, require_uuids=require_uuids)
         if fields is None or fields["chunk_id"] in seen:
             rejected += 1
             continue
@@ -217,4 +214,3 @@ def passages_from_result(
         if not passages:
             raise RetrievalFailure("All retrieved chunks failed integrity checks")
     return passages
-

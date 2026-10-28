@@ -8,8 +8,8 @@ from fastapi.responses import JSONResponse
 from app.models import HealthResponse, QueryRequest, QueryResponse, ReadinessResponse
 from app.orchestrator import QueryOrchestrator
 from app.ports import AdapterNotConfigured, DependencyUnavailable, UnsupportedQueryFilter
-from app.retrieval.errors import FilterError, RetrievalFailure, RetrievalTimeoutError
 from app.rate_limit import enforce_rate_limit
+from app.retrieval.errors import FilterError, RetrievalFailure, RetrievalTimeoutError
 from app.security import AuthenticatedUser, require_authenticated_user
 
 router = APIRouter()
@@ -28,10 +28,8 @@ async def readiness(request: Request) -> ReadinessResponse | JSONResponse:
     outcomes = await asyncio.gather(*(check() for check in checks.values()))
     dependencies: dict[str, bool] = dict(zip(checks, outcomes, strict=True))
     ready = all(dependencies.values())
-    response = ReadinessResponse(
-        status="ready" if ready else "not_ready",
-        dependencies=dependencies,
-    )
+    # Do not expose dependency-level details to unauthenticated callers.
+    response = ReadinessResponse(status="ready" if ready else "not_ready", dependencies={})
     if not ready:
         return JSONResponse(status_code=503, content=response.model_dump(mode="json"))
     return response

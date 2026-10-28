@@ -13,7 +13,9 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from app.adapters.local_test import LocalTestAnswerGeneration
 from app.adapters.postgres import PostgresQueryAdapter
+from app.adapters.sqlite_sources import SqliteSourceRecordAdapter
 from app.adapters.vertex import VertexAIAdapter
 from app.api.compat import router as compat_router
 from app.api.errors import register_error_handlers
@@ -21,7 +23,8 @@ from app.api.routes import router
 from app.auth_service import AuthService
 from app.email import SMTPEmailSender
 from app.logging_config import configure_logging
-from app.middleware import RequestLoggingMiddleware
+from app.middleware import RequestBodyLimitMiddleware, RequestLoggingMiddleware
+from app.models import QueryFilters, RetrievedPassage
 from app.orchestrator import QueryOrchestrator
 from app.ports import (
     AnswerGenerationPort,
@@ -31,9 +34,9 @@ from app.ports import (
     UnconfiguredRetrieval,
     UnconfiguredSourceRecords,
 )
-from app.models import QueryFilters, RetrievedPassage
-from app.retrieval.integration import create_backend_retrieval_adapter
 from app.rate_limit import RedisRateLimiter
+from app.retrieval.config import RetrievalSettings
+from app.retrieval.integration import create_backend_retrieval_adapter
 from app.security import OIDCVerifier
 from app.settings import Settings
 
@@ -131,22 +134,30 @@ def create_app(
         if database_engine and vertex_adapter and resolved_settings.vertex_embedding_model_id
         else None
     )
+    retrieval_settings = RetrievalSettings.from_environment()
     default_retrieval_adapter = (
-        retrieval
-        if retrieval is not None
-        else postgres_adapter or UnconfiguredRetrieval()
+        retrieval if retrieval is not None else postgres_adapter or UnconfiguredRetrieval()
     )
     retrieval_slot = _RetrievalSlot(default_retrieval_adapter)
     source_records_adapter = (
         source_records
         if source_records is not None
-        else postgres_adapter or UnconfiguredSourceRecords()
+        else (
+            SqliteSourceRecordAdapter(retrieval_settings.sqlite_path)
+            if retrieval_settings.vector_store == "sqlite" and retrieval_settings.sqlite_path
+            else postgres_adapter or UnconfiguredSourceRecords()
+        )
     )
     answer_generation_adapter = (
         answer_generation
         if answer_generation is not None
         else (
-            vertex_adapter
+            LocalTestAnswerGeneration()
+            if (
+                os.getenv("LOCAL_TEST_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
+                and resolved_settings.environment.lower() == "development"
+            )
+            else vertex_adapter
             if vertex_adapter
             else UnconfiguredAnswerGeneration()
         )
@@ -155,17 +166,28 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         active_retrieval: RetrievalPort | None = retrieval
+        retention_task: asyncio.Task[None] | None = None
         if retrieval is not None:
             warmup = getattr(retrieval, "warmup", None)
             if warmup is not None:
                 await asyncio.to_thread(warmup)
-        elif (
-            os.getenv("RETRIEVAL_PORT_ADAPTER_ENABLED", "false").strip().lower()
-            in {"1", "true", "yes", "on"}
-        ):
+        elif os.getenv("RETRIEVAL_PORT_ADAPTER_ENABLED", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
             candidate = None
             try:
-                if database_engine is None:
+                if retrieval_settings.vector_store == "sqlite":
+                    candidate = create_backend_retrieval_adapter(
+                        RetrievedPassage, resolved_settings.database_url
+                    )
+                    await asyncio.to_thread(candidate.warmup)
+                    retrieval_slot.replace(candidate)
+                    active_retrieval = candidate
+                    logger.info("SQLite RetrievalPort adapter initialized and warmed up")
+                elif database_engine is None:
                     logger.warning(
                         "Pratik retrieval adapter is enabled but DATABASE_URL is not configured"
                     )
@@ -174,7 +196,7 @@ def create_app(
                         model_rows = (
                             await connection.execute(
                                 text(
-                                    "SELECT provider FROM embedding_models "
+                                    "SELECT provider, model_id FROM embedding_models "
                                     "WHERE is_active = true"
                                 )
                             )
@@ -182,18 +204,16 @@ def create_app(
                         vector_count = await connection.scalar(
                             text("SELECT count(*) FROM chunks WHERE embedding IS NOT NULL")
                         )
-                    remote_providers = {
-                        "vertex", "vertexai", "vertex_ai", "google", "gemini", "openai"
-                    }
                     if (
                         len(model_rows) != 1
-                        or (model_rows[0][0] or "").strip().lower() in remote_providers
                         or not vector_count
+                        or not retrieval_settings.embedding_model
+                        or (model_rows[0][1] or "").strip() != retrieval_settings.embedding_model
                     ):
                         logger.warning(
-                            "Pratik retrieval adapter is enabled but requires one locally "
-                            "loadable active embedding model and at least one stored vector; "
-                            "keeping the configured backend adapter"
+                            "Pratik retrieval adapter is enabled but requires one active "
+                            "embedding model matching RETRIEVAL_EMBEDDING_MODEL and at least "
+                            "one stored vector; keeping the configured backend adapter"
                         )
                     else:
                         candidate = create_backend_retrieval_adapter(
@@ -210,11 +230,41 @@ def create_app(
                     except Exception:
                         logger.exception("Failed to close incomplete retrieval adapter")
                 logger.exception(
-                    "Pratik retrieval adapter could not start; keeping the configured backend adapter"
+                    "Pratik retrieval adapter could not start; keeping the configured "
+                    "backend adapter"
                 )
+        if database_engine is not None and is_production:
+
+            async def purge_expired_chat_history() -> None:
+                while True:
+                    try:
+                        async with database_engine.begin() as connection:
+                            result = await connection.execute(
+                                text(
+                                    """DELETE FROM query_runs
+                                       WHERE request_type = 'CHAT'
+                                         AND created_at < now() - make_interval(days => :days)"""
+                                ),
+                                {"days": resolved_settings.chat_retention_days},
+                            )
+                        logger.info(
+                            "privacy.chat_history_retention_cleanup",
+                            extra={"deleted_records": result.rowcount or 0},
+                        )
+                    except Exception:
+                        logger.exception("privacy.chat_history_retention_cleanup_failed")
+                    await asyncio.sleep(24 * 60 * 60)
+
+            retention_task = asyncio.create_task(purge_expired_chat_history())
         try:
             yield
         finally:
+            if retention_task is not None:
+                retention_task.cancel()
+                try:
+                    await retention_task
+                except asyncio.CancelledError:
+                    pass
             if active_retrieval is not None:
                 close = getattr(active_retrieval, "close", None)
                 if close is not None:
@@ -272,7 +322,9 @@ def create_app(
     application.state.database_engine = database_engine
     application.state.redis_client = redis_client
     application.state.auth_service = (
-        AuthService(database_engine, redis_client, resolved_settings, SMTPEmailSender(resolved_settings))
+        AuthService(
+            database_engine, redis_client, resolved_settings, SMTPEmailSender(resolved_settings)
+        )
         if database_engine is not None and redis_client is not None
         else None
     )
@@ -290,6 +342,17 @@ def create_app(
     )
     application.state.rate_limiter = (
         RedisRateLimiter(redis_client, resolved_settings) if redis_client else None
+    )
+    application.state.auth_identity_rate_limiter = (
+        RedisRateLimiter(
+            redis_client,
+            resolved_settings,
+            limit=resolved_settings.auth_identity_rate_limit_requests,
+            window_seconds=resolved_settings.auth_identity_rate_limit_window_seconds,
+            key_prefix="api:auth-identity-rate-limit",
+        )
+        if redis_client
+        else None
     )
 
     async def database_is_ready() -> bool:
@@ -348,6 +411,10 @@ def create_app(
         "database": database_is_ready,
         "authentication": authentication_is_ready,
     }
+    application.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_body_bytes=resolved_settings.max_request_body_bytes,
+    )
     application.add_middleware(
         RequestLoggingMiddleware,
         strict_transport_security=is_production,

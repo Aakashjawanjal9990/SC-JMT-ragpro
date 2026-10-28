@@ -18,9 +18,7 @@ def register_error_handlers(application: FastAPI) -> None:
             message = error.get("msg", "Invalid request value.")
             safe_errors.append(
                 {
-                    "field": ".".join(
-                        str(part) for part in error.get("loc", ()) if part != "body"
-                    ),
+                    "field": ".".join(str(part) for part in error.get("loc", ()) if part != "body"),
                     "code": error.get("type", "invalid_value"),
                     "message": message,
                     "msg": message,

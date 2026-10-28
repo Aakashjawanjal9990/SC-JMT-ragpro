@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
@@ -23,6 +24,21 @@ CODE_TTL_SECONDS = 600
 MAX_CODE_ATTEMPTS = 5
 SESSION_DAYS = 30
 ADMIN_SESSION_HOURS = 8
+logger = logging.getLogger("supreme_court_rag.security")
+
+_CONSUME_CHALLENGE_SCRIPT = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then return {0, ''} end
+local payload = cjson.decode(raw)
+if payload['code_hash'] == ARGV[1] then
+  redis.call('DEL', KEYS[1], KEYS[2], KEYS[3])
+  return {1, payload['subject']}
+end
+local attempts = redis.call('INCR', KEYS[2])
+if attempts == 1 then redis.call('EXPIRE', KEYS[2], tonumber(ARGV[3])) end
+if attempts >= tonumber(ARGV[2]) then redis.call('DEL', KEYS[1], KEYS[2], KEYS[3]) end
+return {2, ''}
+"""
 
 
 class AuthService:
@@ -120,9 +136,7 @@ class AuthService:
             user = result.mappings().one_or_none()
         if user is None:
             raise ValueError("The code is invalid or expired.")
-        token, authenticated = await self._create_session(
-            user, ip_address, user_agent, admin=False
-        )
+        token, authenticated = await self._create_session(user, ip_address, user_agent, admin=False)
         await self._record_activity(
             user_id,
             UUID(authenticated.session_id),
@@ -138,9 +152,7 @@ class AuthService:
         result = await self._fetch_user_by_email(normalized_email)
         if result is None or result["account_status"] != "pending":
             return
-        await self.create_and_send_challenge(
-            normalized_email, "verify", str(result["user_uuid"])
-        )
+        await self.create_and_send_challenge(normalized_email, "verify", str(result["user_uuid"]))
 
     async def login(
         self,
@@ -155,19 +167,57 @@ class AuthService:
         result = await self._fetch_user_by_email(normalized_email)
         stored_hash = result["password_hash"] if result else self._dummy_hash
         if not self._verify_password(stored_hash, password):
+            await self._log_auth_failure(
+                "login_rejected",
+                normalized_email,
+                ip_address,
+                user_agent,
+                user_id=UUID(str(result["user_uuid"])) if result else None,
+            )
             raise PermissionError("Email or password is incorrect.")
         if result is None or result["account_status"] != "active":
             if result and result["account_status"] == "pending":
+                await self._log_auth_failure(
+                    "login_unverified",
+                    normalized_email,
+                    ip_address,
+                    user_agent,
+                    user_id=UUID(str(result["user_uuid"])),
+                )
                 raise PermissionError("Verify your email before signing in.")
+            await self._log_auth_failure(
+                "login_rejected",
+                normalized_email,
+                ip_address,
+                user_agent,
+                user_id=UUID(str(result["user_uuid"])) if result else None,
+            )
             raise PermissionError("Email or password is incorrect.")
         if admin and result["role"] != "admin":
+            await self._log_auth_failure(
+                "admin_login_rejected",
+                normalized_email,
+                ip_address,
+                user_agent,
+                user_id=UUID(str(result["user_uuid"])),
+            )
             raise PermissionError("Admin credentials are incorrect.")
         if not admin and result["role"] == "admin":
-            # Admins can still use the research UI with their regular login.
-            pass
+            # A regular login would otherwise grant admin APIs a 30-day session.
+            await self._log_auth_failure(
+                "admin_login_requires_admin_flow",
+                normalized_email,
+                ip_address,
+                user_agent,
+                user_id=UUID(str(result["user_uuid"])),
+            )
+            raise PermissionError("Email or password is incorrect.")
         async with self._engine.begin() as connection:
             await connection.execute(
-                text("UPDATE users SET last_login_at = now(), updated_at = now() WHERE user_uuid = :id"),
+                text(
+                    "UPDATE users SET last_login_at = now(), updated_at = now() "
+                    "WHERE user_uuid = :id"
+                ),
                 {"id": result["user_uuid"]},
             )
         token, user = await self._create_session(result, ip_address, user_agent, admin=admin)
@@ -186,9 +236,7 @@ class AuthService:
         user = await self._fetch_user_by_email(normalized_email)
         if user is None or user["account_status"] != "active":
             return
-        await self.create_and_send_challenge(
-            normalized_email, "reset", str(user["user_uuid"])
-        )
+        await self.create_and_send_challenge(normalized_email, "reset", str(user["user_uuid"]))
 
     async def reset_password(self, email: str, code: str, password: str) -> None:
         normalized_email = self._normalize_email(email)
@@ -258,13 +306,37 @@ class AuthService:
     async def logout(self, token: str) -> None:
         token_hash = self._token_hash(token)
         async with self._engine.begin() as connection:
-            await connection.execute(
+            result = await connection.execute(
                 text(
-                    """UPDATE user_sessions SET status = 'REVOKED', logout_at = now()
-                       WHERE session_token_hash = :token_hash AND status = 'ACTIVE'"""
+                    """UPDATE user_sessions
+                       SET status = 'REVOKED', logout_at = now()
+                       WHERE session_token_hash = :token_hash AND status = 'ACTIVE'
+                       RETURNING session_uuid, user_uuid"""
                 ),
                 {"token_hash": token_hash},
             )
+            session = result.mappings().one_or_none()
+            role = None
+            if session is not None:
+                role = await connection.scalar(
+                    text("SELECT role FROM users WHERE user_uuid = :user_id"),
+                    {"user_id": session["user_uuid"]},
+                )
+        if session is not None:
+            event_type = "ADMIN_LOGOUT" if role == "admin" else "LOGOUT"
+            try:
+                await self._record_activity(
+                    session["user_uuid"],
+                    session["session_uuid"],
+                    event_type,
+                    "Administrator signed out"
+                    if event_type == "ADMIN_LOGOUT"
+                    else "User signed out",
+                    None,
+                    None,
+                )
+            except Exception:
+                logger.exception("security.logout_activity_write_failed")
 
     async def _create_session(
         self,
@@ -277,9 +349,7 @@ class AuthService:
         token = secrets.token_urlsafe(32)
         session_id = uuid4()
         expires_at = datetime.now(UTC) + (
-            timedelta(hours=ADMIN_SESSION_HOURS)
-            if admin
-            else timedelta(days=SESSION_DAYS)
+            timedelta(hours=ADMIN_SESSION_HOURS) if admin else timedelta(days=SESSION_DAYS)
         )
         async with self._engine.begin() as connection:
             await connection.execute(
@@ -357,32 +427,70 @@ class AuthService:
 
     async def create_and_send_challenge(self, email: str, purpose: str, subject: str) -> None:
         code = await self._create_challenge(email, purpose, subject)
-        await self._redis.set(
-            self._challenge_key(email, purpose) + ":delivery", code, ex=60
-        )
+        await self._redis.set(self._challenge_key(email, purpose) + ":delivery", code, ex=60)
         await self._send_challenge(email, purpose)
 
     async def _consume_challenge(self, email: str, purpose: str, code: str) -> dict[str, str]:
         key = self._challenge_key(email, purpose)
-        raw = await self._redis.get(key)
-        if not raw:
-            raise ValueError("The code is invalid or expired.")
-        try:
-            payload = json.loads(raw)
-            expected = payload["code_hash"]
-            subject = payload["subject"]
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:
-            raise ValueError("The code is invalid or expired.") from exc
         attempts_key = key + ":attempts"
-        if not hmac.compare_digest(expected, self._code_hash(email, purpose, code)):
-            attempts = await self._redis.incr(attempts_key)
-            if attempts == 1:
-                await self._redis.expire(attempts_key, CODE_TTL_SECONDS)
-            if attempts >= MAX_CODE_ATTEMPTS:
-                await self._redis.delete(key, attempts_key)
+        delivery_key = key + ":delivery"
+        outcome, subject = await self._redis.eval(
+            _CONSUME_CHALLENGE_SCRIPT,
+            3,
+            key,
+            attempts_key,
+            delivery_key,
+            self._code_hash(email, purpose, code),
+            MAX_CODE_ATTEMPTS,
+            CODE_TTL_SECONDS,
+        )
+        if int(outcome) != 1:
+            await self._log_auth_failure(f"{purpose}_code_rejected", email, None)
             raise ValueError("The code is invalid or expired.")
-        await self._redis.delete(key, attempts_key, key + ":delivery")
+        if not isinstance(subject, str) or not subject:
+            raise ValueError("The code is invalid or expired.")
         return {"subject": subject}
+
+    async def _log_auth_failure(
+        self,
+        event: str,
+        identity: str,
+        ip_address: str | None,
+        user_agent: str | None = None,
+        *,
+        user_id: UUID | None = None,
+    ) -> None:
+        identity_hash = hashlib.sha256(identity.strip().lower().encode("utf-8")).hexdigest()
+        logger.warning(
+            "security.authentication.failure",
+            extra={
+                "security_event": event,
+                "outcome": "denied",
+                "subject_hash": identity_hash,
+                "client_ip": ip_address,
+            },
+        )
+        if event.startswith("admin_login"):
+            event_type = "admin_login_failed"
+        elif event.startswith("login"):
+            event_type = "login_failed"
+        else:
+            event_type = event.replace("_rejected", "_failed")
+        try:
+            await self._record_activity(
+                user_id,
+                None,
+                event_type,
+                "Administrator sign-in failed"
+                if event_type.startswith("admin_")
+                else "Sign-in failed",
+                ip_address,
+                user_agent,
+                metadata={"outcome": "FAILED", "subject_hash": identity_hash},
+            )
+        except Exception:
+            # Authentication failures remain generic even if audit storage is unavailable.
+            logger.exception("security.authentication.failure_audit_write_failed")
 
     async def _record_activity(
         self,
@@ -392,6 +500,8 @@ class AuthService:
         action: str,
         ip_address: str | None,
         user_agent: str | None,
+        *,
+        metadata: dict[str, str] | None = None,
     ) -> None:
         async with self._engine.begin() as connection:
             await connection.execute(
@@ -401,7 +511,8 @@ class AuthService:
                            event_type, action, ip_address, user_agent, metadata
                        ) VALUES (
                            :event_id, :user_id, :session_id, :event_type,
-                           :action, CAST(:ip_address AS inet), :user_agent, '{}'::jsonb
+                           :action, CAST(:ip_address AS inet), :user_agent,
+                           CAST(:metadata AS jsonb)
                        )"""
                 ),
                 {
@@ -412,6 +523,7 @@ class AuthService:
                     "action": action,
                     "ip_address": ip_address,
                     "user_agent": (user_agent or "")[:512],
+                    "metadata": json.dumps(metadata or {}),
                 },
             )
 
@@ -435,7 +547,7 @@ class AuthService:
         }
 
     def _code_hash(self, email: str, purpose: str, code: str) -> str:
-        message = f"{purpose}:{self._normalize_email(email)}:{code}".encode("utf-8")
+        message = f"{purpose}:{self._normalize_email(email)}:{code}".encode()
         return hmac.new(self._challenge_secret, message, hashlib.sha256).hexdigest()
 
     def csrf_token(self, session_token: str) -> str:

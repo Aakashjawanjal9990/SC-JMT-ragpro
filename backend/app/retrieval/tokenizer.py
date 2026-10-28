@@ -15,12 +15,26 @@ TOKENIZER_VERSION = "1"
 
 # Canonical prefixes for provision references.
 _REFERENCE_PREFIXES = {
-    "s": "s", "ss": "s", "sec": "s", "secs": "s", "section": "s", "sections": "s",
-    "art": "art", "arts": "art", "article": "art", "articles": "art",
-    "r": "r", "rule": "r", "rules": "r",
-    "o": "o", "ord": "o", "order": "o",
-    "cl": "cl", "clause": "cl",
-    "reg": "reg", "regulation": "reg",
+    "s": "s",
+    "ss": "s",
+    "sec": "s",
+    "secs": "s",
+    "section": "s",
+    "sections": "s",
+    "art": "art",
+    "arts": "art",
+    "article": "art",
+    "articles": "art",
+    "r": "r",
+    "rule": "r",
+    "rules": "r",
+    "o": "o",
+    "ord": "o",
+    "order": "o",
+    "cl": "cl",
+    "clause": "cl",
+    "reg": "reg",
+    "regulation": "reg",
 }
 
 STOPWORDS = frozenset(
@@ -42,7 +56,7 @@ _DOTTED_ACRONYM = re.compile(r"\b(?:[a-z]\.){2,}(?:[a-z]\b\.?)?")
 _UNDER_SECTION = re.compile(r"\bu/ss?\b\.?")
 _TOKEN = re.compile(
     r"(?P<ref>[a-z]{1,12}\.\s?\d+[a-z]?(?:-[a-z0-9]+)?)"  # s.438, art. 21-a, sec.302
-    r"|(?P<num>\d+[a-z]?(?:-[a-z0-9]+)?)"                 # 438, 21-a, 498a
+    r"|(?P<num>\d+[a-z]?(?:-[a-z0-9]+)?)"  # 438, 21-a, 498a
     r"|(?P<word>[a-z]+)"
 )
 _NUM_SUFFIX = re.compile(r"^(\d+)([a-z])$")
@@ -81,4 +95,3 @@ def tokenize(text: str) -> list[str]:
             if len(word) > 1 and word not in STOPWORDS:
                 tokens.append(word)
     return tokens
-

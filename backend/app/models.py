@@ -69,6 +69,13 @@ class QueryRequest(BaseModel):
         return value.strip()
 
 
+class ConversationTurn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["user", "assistant"]
+    text: str = Field(min_length=1, max_length=2_000)
+
+
 class RetrievedPassage(BaseModel):
     """Passage returned by retrieval; page numbers refer to the source PDF."""
 

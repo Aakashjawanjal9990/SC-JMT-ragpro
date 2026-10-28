@@ -11,7 +11,7 @@ store is for local development and tests.
 """
 
 import json
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -32,10 +32,6 @@ class VectorStore(Protocol):
     def get(self, ids: Sequence[str], filters: Filters | None = None) -> list[Chunk]:
         """Re-read citable chunks matching `filters` by id, in the requested order;
         others are skipped."""
-        ...
-
-    def iter_chunks(self) -> Iterator[Chunk]:
-        """Every citable chunk, used to build the BM25 index over the same ids."""
         ...
 
 
@@ -107,9 +103,6 @@ class InMemoryVectorStore:
             if r is not None and self._citable[r] and matches(self._chunks[r].metadata, filters)
         ]
 
-    def iter_chunks(self) -> Iterator[Chunk]:
-        return (c for c, citable in zip(self._chunks, self._citable) if citable)
-
 
 def open_vector_store(settings: RetrievalSettings) -> VectorStore:
     if settings.vector_store == "memory":
@@ -120,4 +113,3 @@ def open_vector_store(settings: RetrievalSettings) -> VectorStore:
         f"No adapter for vector store {settings.vector_store!r}; add one in "
         "app/retrieval/vector_store.py"
     )
-

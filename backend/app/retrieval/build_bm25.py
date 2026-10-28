@@ -51,8 +51,10 @@ def main(argv: list[str] | None = None) -> None:
                 parser.error("pass --output or set RETRIEVAL_BM25_INDEX_PATH")
             index = BM25Index.build(source.iter_chunks(), method=settings.bm25_method)
             index.save(args.output)
-            print(f"Indexed {len(index)} chunks into {args.output} "
-                  f"in {time.perf_counter() - start:.1f}s")
+            print(
+                f"Indexed {len(index)} chunks into {args.output} "
+                f"in {time.perf_counter() - start:.1f}s"
+            )
     finally:
         for database in databases:
             database.close()
@@ -60,4 +62,3 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-
