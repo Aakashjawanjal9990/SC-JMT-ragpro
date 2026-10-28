@@ -53,7 +53,12 @@ class QueryOrchestrator:
             return self._insufficient(request_id, "No usable passages were retrieved.")
 
         evidence = [
-            EvidenceInput(evidence_id=f"E{index}", text=passage.text)
+            EvidenceInput(
+                evidence_id=f"E{index}",
+                text=passage.text,
+                document_id=passage.document_id,
+                original_page_numbers=passage.original_page_numbers,
+            )
             for index, passage in enumerate(usable, start=1)
         ]
         passages_by_id = {

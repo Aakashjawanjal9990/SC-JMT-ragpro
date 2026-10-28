@@ -31,6 +31,7 @@ class InMemoryBM25:
         indptr: np.ndarray,
         rows: np.ndarray,
         weights: np.ndarray,
+        idf: np.ndarray | None = None,
     ) -> None:
         self._ids = ids
         self._metadata = metadata
@@ -38,6 +39,7 @@ class InMemoryBM25:
         self._indptr = indptr
         self._rows = rows
         self._weights = weights
+        self._idf = idf if idf is not None else np.zeros(len(vocab), dtype=np.float32)
 
     def __len__(self) -> int:
         return len(self._ids)
@@ -78,7 +80,13 @@ class InMemoryBM25:
         indptr = np.zeros(len(vocab) + 1, dtype=np.int64)
         np.cumsum(np.bincount(t, minlength=len(vocab)), out=indptr[1:])
         index = cls(
-            ids, metadata, vocab, indptr, r[order].copy(), weights[order].astype(np.float32)
+            ids,
+            metadata,
+            vocab,
+            indptr,
+            r[order].copy(),
+            weights[order].astype(np.float32),
+            idf.astype(np.float32),
         )
         logger.info(
             "Built in-memory BM25: %d chunks, %d terms, %d postings in %.0fs",
@@ -91,12 +99,34 @@ class InMemoryBM25:
 
     def search(self, query: str, k: int, filters: Filters | None = None) -> list[tuple[str, float]]:
         """Top-k (chunk_id, score) among chunks containing at least one query term."""
-        terms = [self._vocab[t] for t in set(tokenize(query)) if t in self._vocab]
-        if not terms or k <= 0:
+        return self.search_weighted({term: 1.0 for term in set(tokenize(query))}, k, filters)
+
+    def idf(self, terms: list[str]) -> dict[str, float]:
+        return {
+            term: float(self._idf[index])
+            for term in terms
+            if (index := self._vocab.get(term)) is not None
+        }
+
+    def search_weighted(
+        self, term_weights: dict[str, float], k: int, filters: Filters | None = None
+    ) -> list[tuple[str, float]]:
+        """Search with per-term query weights for pseudo-relevance feedback."""
+        weighted_terms = [
+            (self._vocab[term], float(weight))
+            for term, weight in term_weights.items()
+            if term in self._vocab and weight > 0
+        ]
+        if not weighted_terms or k <= 0:
             return []
-        rows = np.concatenate([self._rows[self._indptr[t] : self._indptr[t + 1]] for t in terms])
+        rows = np.concatenate(
+            [self._rows[self._indptr[term] : self._indptr[term + 1]] for term, _ in weighted_terms]
+        )
         weights = np.concatenate(
-            [self._weights[self._indptr[t] : self._indptr[t + 1]] for t in terms]
+            [
+                self._weights[self._indptr[term] : self._indptr[term + 1]] * query_weight
+                for term, query_weight in weighted_terms
+            ]
         )
         scores = np.bincount(rows, weights=weights, minlength=len(self._ids))
         candidates = np.unique(rows)

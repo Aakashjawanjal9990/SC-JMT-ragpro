@@ -25,7 +25,9 @@ function used on queries here; otherwise legal references like "s.438" will not 
 Swap a rebuilt index in atomically (e.g. build into a staging schema, then rename).
 """
 
+import math
 import re
+from collections.abc import Mapping
 
 from app.retrieval.db import Database
 from app.retrieval.filters import Filters
@@ -75,29 +77,52 @@ class PostgresBM25Index:
 
     def search(self, query: str, k: int, filters: Filters | None = None) -> list[tuple[str, float]]:
         """Top-k (chunk_uuid, score). Only chunks containing a query term can match."""
-        terms = sorted(set(tokenize(query)))
+        return self.search_weighted({term: 1.0 for term in set(tokenize(query))}, k, filters)
+
+    def idf(self, terms: list[str]) -> dict[str, float]:
+        """Lucene idf values used by pseudo-relevance feedback."""
+        terms = sorted(set(terms))
+        if not terms:
+            return {}
+        n = len(self)
+        rows = self.db.fetch_all(
+            f"SELECT term, df FROM {self.schema}.terms "  # noqa: S608  # nosec B608
+            "WHERE term = ANY(CAST(:terms AS text[]))",
+            {"terms": terms},
+        )
+        return {term: math.log(1 + (n - df + 0.5) / (df + 0.5)) for term, df in rows}
+
+    def search_weighted(
+        self,
+        term_weights: Mapping[str, float],
+        k: int,
+        filters: Filters | None = None,
+    ) -> list[tuple[str, float]]:
+        """Search with per-term query weights for pseudo-relevance feedback."""
+        terms = sorted(term for term, weight in term_weights.items() if weight > 0)
         if not terms or k <= 0:
             return []
+        weights = [float(term_weights[term]) for term in terms]
         s = self.schema
+        filter_sql, params = filters_to_sql(filters, self._columns)
         if filters or not self.postings_per_term:
-            filter_sql, params = filters_to_sql(filters, self._columns)
-            join = f"JOIN {s}.chunks c ON c.chunk_uuid = p.chunk_uuid" if filter_sql else ""
-            # Schema and filter identifiers come only from validated config and fixed maps.
             sql = (
-                f"SELECT p.chunk_uuid, SUM(p.weight) AS score "  # noqa: S608  # nosec B608
-                f"FROM {s}.postings p {join} "
-                f"WHERE p.term = ANY(CAST(:terms AS text[])){filter_sql} "
+                f"SELECT p.chunk_uuid, SUM(p.weight * q.qw) AS score "  # noqa: S608  # nosec B608
+                f"FROM unnest(CAST(:terms AS text[]), CAST(:weights AS float8[])) AS q(term, qw) "
+                f"JOIN {s}.postings p ON p.term = q.term "
+                f"JOIN {s}.chunks c ON c.chunk_uuid = p.chunk_uuid "
+                f"WHERE true{filter_sql} "
                 "GROUP BY p.chunk_uuid ORDER BY score DESC, p.chunk_uuid LIMIT :k"
             )
         else:
             params = {"m": self.postings_per_term}
             sql = (
-                "SELECT t.chunk_uuid, SUM(t.weight) AS score "  # noqa: S608  # nosec B608
-                "FROM unnest(CAST(:terms AS text[])) AS q(term) "
+                "SELECT t.chunk_uuid, SUM(t.weight * q.qw) AS score "  # noqa: S608  # nosec B608
+                "FROM unnest(CAST(:terms AS text[]), CAST(:weights AS float8[])) AS q(term, qw) "
                 "CROSS JOIN LATERAL ("
                 f"SELECT p.chunk_uuid, p.weight FROM {s}.postings p "
                 "WHERE p.term = q.term ORDER BY p.weight DESC LIMIT :m"
                 ") AS t GROUP BY t.chunk_uuid ORDER BY score DESC, t.chunk_uuid LIMIT :k"
             )
-        params.update(terms=terms, k=k)
+        params.update(terms=terms, weights=weights, k=k)
         return [(str(row[0]), float(row[1])) for row in self.db.fetch_all(sql, params)]

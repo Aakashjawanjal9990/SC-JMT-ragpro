@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.adapters.local_test import LocalTestAnswerGeneration
 from app.adapters.postgres import PostgresQueryAdapter
+from app.adapters.pratik_generation import PratikAnswerGenerationAdapter
 from app.adapters.sqlite_sources import SqliteSourceRecordAdapter
 from app.adapters.vertex import VertexAIAdapter
 from app.api.compat import router as compat_router
@@ -157,8 +158,12 @@ def create_app(
                 os.getenv("LOCAL_TEST_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
                 and resolved_settings.environment.lower() == "development"
             )
-            else vertex_adapter
-            if vertex_adapter
+            else (
+                PratikAnswerGenerationAdapter(resolved_settings)
+                if resolved_settings.answer_generation_provider == "groq"
+                else vertex_adapter
+            )
+            if (resolved_settings.answer_generation_provider == "groq" or vertex_adapter)
             else UnconfiguredAnswerGeneration()
         )
     )
@@ -171,7 +176,11 @@ def create_app(
             warmup = getattr(retrieval, "warmup", None)
             if warmup is not None:
                 await asyncio.to_thread(warmup)
-        elif os.getenv("RETRIEVAL_PORT_ADAPTER_ENABLED", "false").strip().lower() in {
+        if isinstance(answer_generation_adapter, PratikAnswerGenerationAdapter):
+            await asyncio.to_thread(answer_generation_adapter.warmup)
+        if retrieval is None and os.getenv(
+            "RETRIEVAL_PORT_ADAPTER_ENABLED", "false"
+        ).strip().lower() in {
             "1",
             "true",
             "yes",
@@ -283,6 +292,8 @@ def create_app(
                 await database_engine.dispose()
             if vertex_adapter is not None:
                 await vertex_adapter.close()
+            if isinstance(answer_generation_adapter, PratikAnswerGenerationAdapter):
+                await answer_generation_adapter.close()
 
     application = FastAPI(
         title="Supreme Court Judgment Query API",

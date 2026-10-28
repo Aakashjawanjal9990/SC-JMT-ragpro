@@ -72,6 +72,19 @@ class RetrievalSettings:
     bm25_schema: str = "bm25"
     bm25_postings_per_term: int = 2000
 
+    # Query expansion settings from Pratik's config.yaml.
+    pseudo_query_enabled: bool = True
+    pseudo_query_model: str = "openai/gpt-oss-120b"
+    pseudo_query_reasoning_effort: str = "low"
+    pseudo_query_max_tokens: int = 400
+    pseudo_query_timeout_seconds: float = 3.0
+    pseudo_query_weight: float = 0.5
+    prf_enabled: bool = True
+    prf_feedback_docs: int = 10
+    prf_expansion_terms: int = 10
+    prf_expansion_weight: float = 0.3
+    doc_decay: float = 0.85
+
     # Reranker for the merged candidates: "none" (rank fusion, default), "vertex"
     # (Vertex AI Ranking API) or "cross-encoder" (local; needs sentence-transformers).
     reranker: str = "none"
@@ -122,6 +135,36 @@ class RetrievalSettings:
             bm25_postings_per_term=_env_int(
                 "RETRIEVAL_BM25_POSTINGS_PER_TERM", defaults.bm25_postings_per_term
             ),
+            pseudo_query_enabled=_env_bool(
+                "RETRIEVAL_PSEUDO_QUERY_ENABLED", defaults.pseudo_query_enabled
+            ),
+            pseudo_query_model=_env_str(
+                "RETRIEVAL_PSEUDO_QUERY_MODEL", defaults.pseudo_query_model
+            ),
+            pseudo_query_reasoning_effort=_env_str(
+                "RETRIEVAL_PSEUDO_QUERY_REASONING_EFFORT",
+                defaults.pseudo_query_reasoning_effort,
+            ),
+            pseudo_query_max_tokens=_env_int(
+                "RETRIEVAL_PSEUDO_QUERY_MAX_TOKENS", defaults.pseudo_query_max_tokens
+            ),
+            pseudo_query_timeout_seconds=_env_float(
+                "RETRIEVAL_PSEUDO_QUERY_TIMEOUT_SECONDS", defaults.pseudo_query_timeout_seconds
+            ),
+            pseudo_query_weight=_env_float(
+                "RETRIEVAL_PSEUDO_QUERY_WEIGHT", defaults.pseudo_query_weight
+            ),
+            prf_enabled=_env_bool("RETRIEVAL_PRF_ENABLED", defaults.prf_enabled),
+            prf_feedback_docs=_env_int(
+                "RETRIEVAL_PRF_FEEDBACK_DOCS", defaults.prf_feedback_docs
+            ),
+            prf_expansion_terms=_env_int(
+                "RETRIEVAL_PRF_EXPANSION_TERMS", defaults.prf_expansion_terms
+            ),
+            prf_expansion_weight=_env_float(
+                "RETRIEVAL_PRF_EXPANSION_WEIGHT", defaults.prf_expansion_weight
+            ),
+            doc_decay=_env_float("RETRIEVAL_DOC_DECAY", defaults.doc_decay),
             reranker=_env_str("RETRIEVAL_RERANKER", defaults.reranker),
             reranker_model=_env_str("RETRIEVAL_RERANKER_MODEL"),
             reranker_location=_env_str("RETRIEVAL_RERANKER_LOCATION", defaults.reranker_location),

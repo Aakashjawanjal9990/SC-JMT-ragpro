@@ -33,7 +33,7 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
-BUILDER_VERSION = "1"
+BUILDER_VERSION = "2"
 
 logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 logger = logging.getLogger("bm25_builder")
@@ -230,9 +230,14 @@ def build() -> dict[str, Any]:
                 chunk_uuid uuid PRIMARY KEY, judgment_uuid uuid NOT NULL,
                 source_file_uuid uuid NOT NULL, judgment_date date, doc_len int NOT NULL)"""
         )
-        tcur.execute(f"CREATE TABLE {STAGING}.postings (term text NOT NULL, chunk_uuid uuid NOT NULL, weight real NOT NULL)")
+        tcur.execute(
+            f"CREATE TABLE {STAGING}.postings "
+            "(term text NOT NULL, chunk_uuid uuid NOT NULL, weight real NOT NULL)"
+        )
+        tcur.execute(f"CREATE TABLE {STAGING}.terms (term text PRIMARY KEY, df int NOT NULL)")
         target.commit()
         copy_rows(target, f"{STAGING}.chunks", chunk_rows)
+        copy_rows(target, f"{STAGING}.terms", df.items())
         del chunk_rows
 
         # Pass 2: weights (same snapshot, so every term is in df).

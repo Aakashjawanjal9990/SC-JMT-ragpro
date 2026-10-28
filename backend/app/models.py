@@ -127,6 +127,8 @@ class EvidenceInput(BaseModel):
 
     evidence_id: str = Field(min_length=1, max_length=64)
     text: str = Field(min_length=1, max_length=20_000)
+    document_id: str | None = Field(default=None, max_length=256)
+    original_page_numbers: list[int] = Field(default_factory=list, max_length=100)
 
 
 class GeneratedAnswer(BaseModel):

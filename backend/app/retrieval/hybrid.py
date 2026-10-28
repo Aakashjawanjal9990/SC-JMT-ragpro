@@ -1,21 +1,20 @@
-"""Retrieval pipeline: vector search + BM25 -> merge -> rerank -> best top_k.
+"""Retrieval pipeline from Pratik's branch, adapted to the backend storage ports.
 
-1. Vector search and BM25 search run in parallel, each returning candidate_k chunks.
-2. The two lists are merged (duplicates removed).
-3. BM25-only hits are re-read from the store, so text, ids, pages and the active
-   check always come from the source of truth.
-4. Candidates are ordered by the reranker if one is configured, otherwise by
-   reciprocal rank fusion of the two lists (no model needed).
-5. The best top_k are returned, at most max_per_doc per judgment.
+It uses HyDE for dense queries, pseudo-relevance feedback for BM25, reciprocal-rank
+fusion, reranking and per-judgment score decay. BM25-only hits are re-read from the
+source store so passage text and citation metadata remain source-of-truth values.
 """
 
 import logging
+import os
 import re
 import time
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+
+import numpy as np
 
 from app.retrieval.bm25_memory import InMemoryBM25
 from app.retrieval.bm25_pg import PostgresBM25Index
@@ -23,8 +22,10 @@ from app.retrieval.config import RetrievalSettings
 from app.retrieval.db import Database
 from app.retrieval.embedder import make_query_embedder
 from app.retrieval.filters import Filters
+from app.retrieval.llm import GroqChat
 from app.retrieval.models import DOCUMENT_ID, Chunk, RetrievedChunk, format_citation
 from app.retrieval.pg_store import PgVectorStore, embedding_dimensions, verify_schema
+from app.retrieval.query_expansion import GroqPseudoQuery, prf_terms
 from app.retrieval.reranker import make_reranker
 from app.retrieval.sqlite_store import DEFAULT_CHUNKS_SQL, SqliteVectorStore
 from app.retrieval.tokenizer import tokenize
@@ -39,6 +40,12 @@ class BM25Searcher(Protocol):
     def search(
         self, query: str, k: int, filters: Filters | None = None
     ) -> list[tuple[str, float]]: ...
+
+    def search_weighted(
+        self, term_weights: dict[str, float], k: int, filters: Filters | None = None
+    ) -> list[tuple[str, float]]: ...
+
+    def idf(self, terms: list[str]) -> dict[str, float]: ...
 
 
 @dataclass
@@ -86,6 +93,13 @@ class HybridRetriever:
         top_k: int = 8,
         candidate_k: int = 20,
         max_per_doc: int | None = 3,
+        pseudo_query: GroqPseudoQuery | None = None,
+        pseudo_weight: float = 0.5,
+        prf_docs: int = 0,
+        prf_terms_count: int = 10,
+        prf_weight: float = 0.3,
+        doc_decay: float = 0.85,
+        rrf_k: int = 60,
     ) -> None:
         self.store = store
         self.embedder = embedder
@@ -94,7 +108,19 @@ class HybridRetriever:
         self.top_k = top_k
         self.candidate_k = candidate_k
         self.max_per_doc = max_per_doc
+        if not 0 <= pseudo_weight <= 1:
+            raise ValueError("pseudo_weight must be between 0 and 1")
+        if not 0 < doc_decay <= 1:
+            raise ValueError("doc_decay must be greater than 0 and at most 1")
+        self.pseudo_query = pseudo_query
+        self.pseudo_weight = pseudo_weight
+        self.prf_docs = prf_docs
+        self.prf_terms_count = prf_terms_count
+        self.prf_weight = prf_weight
+        self.doc_decay = doc_decay
+        self.rrf_k = rrf_k
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="retrieval")
+        self._llm_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pseudo")
         self._databases: list[Database] = []
 
     @classmethod
@@ -169,6 +195,19 @@ class HybridRetriever:
         elif settings.bm25_backend != "none":
             raise ValueError(f"Unknown RETRIEVAL_BM25_BACKEND {settings.bm25_backend!r}")
 
+        pseudo_query = (
+            GroqPseudoQuery(
+                GroqChat(
+                    settings.pseudo_query_model,
+                    os.getenv("GROQ_API_KEY", ""),
+                    max_tokens=settings.pseudo_query_max_tokens,
+                    timeout_seconds=settings.pseudo_query_timeout_seconds,
+                    reasoning_effort=settings.pseudo_query_reasoning_effort,
+                )
+            )
+            if settings.pseudo_query_enabled
+            else None
+        )
         retriever = cls(
             store,
             embedder,
@@ -183,6 +222,12 @@ class HybridRetriever:
             top_k=settings.top_k,
             candidate_k=settings.candidate_k,
             max_per_doc=settings.max_per_doc,
+            pseudo_query=pseudo_query,
+            pseudo_weight=settings.pseudo_query_weight,
+            prf_docs=settings.prf_feedback_docs if settings.prf_enabled else 0,
+            prf_terms_count=settings.prf_expansion_terms,
+            prf_weight=settings.prf_expansion_weight,
+            doc_decay=settings.doc_decay,
         )
         retriever._databases = databases
         return retriever
@@ -190,6 +235,8 @@ class HybridRetriever:
     def warmup(self) -> None:
         """Load models / open clients up front so the first query is fast."""
         self.embedder.warmup()
+        if self.pseudo_query is not None:
+            self.pseudo_query.warmup()
         if self.reranker is not None:
             self.reranker.warmup()
 
@@ -204,6 +251,9 @@ class HybridRetriever:
 
     def close(self) -> None:
         self._executor.shutdown(wait=False)
+        self._llm_executor.shutdown(wait=False)
+        if self.pseudo_query is not None:
+            self.pseudo_query.chat.close()
         for database in self._databases:
             database.close()
 
@@ -213,16 +263,79 @@ class HybridRetriever:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
-    def _vector_search(self, query: str, k: int, filters: Filters | None):
+    def _query_vector(
+        self, query: str, pseudo_job: Future[str] | None
+    ) -> tuple[np.ndarray, dict[str, float]]:
+        timings: dict[str, float] = {}
         start = time.perf_counter()
-        vector = self.embedder.embed(query)
-        embed_ms = _ms(start)
+        vector = np.asarray(self.embedder.embed(query), dtype=np.float32)
+        timings["embed"] = _ms(start)
+        if pseudo_job is None or self.pseudo_query is None:
+            return vector, timings
+        try:
+            start = time.perf_counter()
+            passage = pseudo_job.result(timeout=self.pseudo_query.timeout_seconds)
+            timings["pseudo_llm_wait"] = _ms(start)
+            start = time.perf_counter()
+            embed_document = getattr(self.embedder, "embed_document", self.embedder.embed)
+            pseudo_vector = np.asarray(embed_document(passage), dtype=np.float32)
+            timings["pseudo_embed"] = _ms(start)
+            mixed = (1 - self.pseudo_weight) * vector + self.pseudo_weight * pseudo_vector
+            return (mixed / max(float(np.linalg.norm(mixed)), 1e-12)).astype(np.float32), timings
+        except Exception as exc:
+            pseudo_job.cancel()
+            logger.warning("HyDE query failed; using the original question: %r", exc)
+            return vector, timings
+
+    def _vector_search(
+        self, query: str, k: int, filters: Filters | None, pseudo_job: Future[str] | None
+    ):
+        vector, timings = self._query_vector(query, pseudo_job)
         start = time.perf_counter()
-        return self.store.search(vector, k, filters), embed_ms, _ms(start)
+        results = self.store.search(vector, k, filters)
+        return results, timings, _ms(start)
 
     def _bm25_search(self, query: str, k: int, filters: Filters | None):
         start = time.perf_counter()
-        return self.bm25.search(query, k, filters), _ms(start)
+        terms = sorted(set(tokenize(query)))
+        weights = {term: 1.0 for term in terms}
+        hits = self.bm25.search_weighted(weights, k, filters)
+        timings = {"bm25": _ms(start)}
+        if not self.prf_docs or not hits:
+            return hits, timings
+
+        start = time.perf_counter()
+        try:
+            scores = dict(hits[: self.prf_docs])
+            feedback_chunks = self.store.get(list(scores), filters)
+            feedback = [
+                RetrievedChunk(
+                    id=chunk.id,
+                    text=chunk.text,
+                    metadata=chunk.metadata,
+                    score=scores[chunk.id],
+                    bm25_score=scores[chunk.id],
+                )
+                for chunk in feedback_chunks
+                if chunk.id in scores
+            ]
+            expansion = prf_terms(
+                terms,
+                feedback,
+                self.bm25.idf,
+                num_terms=self.prf_terms_count,
+            )
+            if expansion:
+                weights.update(
+                    {term: self.prf_weight * weight for term, weight in expansion.items()}
+                )
+                hits = self.bm25.search_weighted(weights, k, filters)
+        except Exception as exc:
+            logger.warning(
+                "BM25 pseudo-relevance feedback failed; using first-pass results: %r", exc
+            )
+        timings["prf"] = _ms(start)
+        return hits, timings
 
     def search(
         self, query: str, *, top_k: int | None = None, filters: Filters | None = None
@@ -236,17 +349,26 @@ class HybridRetriever:
         if top_k <= 0 or not _has_content(query):
             return RetrievalResult(query, [], {"total": _ms(total_start)})
 
-        # 1. Vector search and BM25 in parallel.
-        vector_job = self._executor.submit(self._vector_search, query, candidate_k, filters)
+        # 1. BM25 and the pseudo-passage start in the background while dense search runs.
+        pseudo_job = (
+            self._llm_executor.submit(self.pseudo_query.generate, query)
+            if self.pseudo_query is not None
+            else None
+        )
+        vector_job = self._executor.submit(
+            self._vector_search, query, candidate_k, filters, pseudo_job
+        )
         bm25_job = (
             self._executor.submit(self._bm25_search, query, candidate_k, filters)
             if self.bm25
             else None
         )
-        vector_hits, timings["embed"], timings["vector"] = vector_job.result()
+        vector_hits, vector_timings, timings["vector"] = vector_job.result()
+        timings.update(vector_timings)
         bm25_hits: list[tuple[str, float]] = []
         if bm25_job is not None:
-            bm25_hits, timings["bm25"] = bm25_job.result()
+            bm25_hits, bm25_timings = bm25_job.result()
+            timings.update(bm25_timings)
 
         # 2. Merge, keeping each chunk once.
         candidates: dict[str, Chunk] = {hit.id: hit for hit in vector_hits}
@@ -265,14 +387,39 @@ class HybridRetriever:
         # 4. Order candidates: reranker if configured, else rank fusion of both lists.
         start = time.perf_counter()
         pool = list(candidates.values())
-        if self.reranker is not None:
-            scores = self.reranker.score(query, [chunk.text for chunk in pool])
+        fused = rank_fusion(
+            [hit.id for hit in vector_hits],
+            [cid for cid, _ in bm25_hits],
+            k=self.rrf_k,
+        )
+        scores = [fused[chunk.id] for chunk in pool]
+        timings["fusion"] = _ms(start)
+        rerank_succeeded = False
+        if self.reranker is not None and pool:
+            start = time.perf_counter()
+            try:
+                scores = self.reranker.score(query, [chunk.text for chunk in pool])
+                rerank_succeeded = True
+            except Exception as exc:
+                logger.warning("Ranking API failed; using rank fusion order: %r", exc)
             timings["rerank"] = _ms(start)
-        else:
-            fused = rank_fusion([hit.id for hit in vector_hits], [cid for cid, _ in bm25_hits])
-            scores = [fused[chunk.id] for chunk in pool]
-            timings["fusion"] = _ms(start)
+        rerank_scores = (
+            {chunk.id: score for chunk, score in zip(pool, scores, strict=True)}
+            if rerank_succeeded
+            else {}
+        )
         ranked = sorted(zip(pool, scores, strict=True), key=lambda item: -item[1])
+
+        # Pratik's score decay keeps strong passages from the same judgment but gives
+        # passages from other judgments a better chance to appear in the final list.
+        decay_counts: dict[Any, int] = {}
+        decayed = []
+        for chunk, score in ranked:
+            doc_id = chunk.metadata.get(DOCUMENT_ID, chunk.id)
+            seen = decay_counts.get(doc_id, 0)
+            decay_counts[doc_id] = seen + 1
+            decayed.append((chunk, score * self.doc_decay**seen))
+        ranked = sorted(decayed, key=lambda item: -item[1])
 
         # 5. Best top_k, at most max_per_doc chunks per judgment.
         vector_scores = {hit.id: hit.score for hit in vector_hits}
@@ -293,7 +440,7 @@ class HybridRetriever:
                     score=score,
                     dense_score=vector_scores.get(chunk.id),
                     bm25_score=bm25_scores.get(chunk.id),
-                    rerank_score=score if self.reranker is not None else None,
+                    rerank_score=rerank_scores.get(chunk.id),
                 )
             )
             if len(selected) == top_k:
