@@ -6,9 +6,9 @@ Extracts citation, docket, dates, bench, author (*), citations, and counsel from
 import re
 from typing import List, Dict, Optional
 try:
-    from core.models import PageMetadata
-except ImportError:
     from PCEV2.core.models import PageMetadata
+except ImportError:
+    from core.models import PageMetadata
 
 
 class LegalMetadataExtractor:
@@ -20,41 +20,6 @@ class LegalMetadataExtractor:
         "B. K. Mukherjea", "Mukherjea", "Sudhi Ranjan Das", "S. R. Das", "N. Chandrasekhara Aiyar",
         "Vivian Bose", "Sanjay Kumar", "Alok Aradhe", "Ahsanuddin Amanullah", "K. Vinod Chandran"
     ]
-
-    @classmethod
-    def extract_metadata_from_pdf(cls, pdf_path_or_doc, doc_id: Optional[str] = None) -> PageMetadata:
-        """Extracts structured legal metadata from the front matter of a PDF file or PyMuPDF Document."""
-        import fitz
-        from pathlib import Path
-        close_doc = False
-        if isinstance(pdf_path_or_doc, (str, Path)):
-            doc = fitz.open(str(pdf_path_or_doc))
-            close_doc = True
-        else:
-            doc = pdf_path_or_doc
-
-        try:
-            front_text_parts = []
-            max_p = min(len(doc), 2)
-            for p_idx in range(max_p):
-                page_text = doc[p_idx].get_text() or ""
-                front_text_parts.append(page_text)
-            combined_text = "\n".join(front_text_parts)
-            meta = cls.extract_metadata(combined_text)
-            if not meta.case_title:
-                if meta.appellant and meta.respondent:
-                    meta.case_title = f"{meta.appellant} v. {meta.respondent}"
-                elif doc_id:
-                    meta.case_title = f"Supreme Court Judgment {doc_id}"
-                else:
-                    meta.case_title = "Supreme Court Judgment"
-            return meta
-        finally:
-            if close_doc and doc is not None:
-                try:
-                    doc.close()
-                except Exception:
-                    pass
 
     @classmethod
     def extract_metadata(cls, text: str) -> PageMetadata:

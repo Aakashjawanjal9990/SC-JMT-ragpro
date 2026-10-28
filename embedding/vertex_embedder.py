@@ -14,11 +14,11 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 try:
-    from core.models import ChunkRecord
-    from config import config
-except ImportError:
     from PCEV2.core.models import ChunkRecord
     from PCEV2.config import config
+except ImportError:
+    from core.models import ChunkRecord
+    from config import config
 
 
 def build_short_embedding_text(

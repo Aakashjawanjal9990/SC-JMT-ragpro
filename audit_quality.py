@@ -20,7 +20,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 from config import config, resolve_database_url
-from storage.gcs_loader import GCSDataLoader
 
 
 def estimate_tokens(text: str) -> int:
@@ -74,10 +73,22 @@ class QualityAuditor:
         lowercase_starts = 0
         fragment_headings = 0
         rule_r2_violations = 0
+        provenance_violations = 0
         empty_chunks = 0
+        seen_chunk_ids = set()
         token_lens = []
 
         for c in chunks:
+            if not isinstance(c, dict):
+                provenance_violations += 1
+                continue
+            chunk_id = c.get("chunk_id")
+            if not chunk_id or chunk_id in seen_chunk_ids:
+                provenance_violations += 1
+            if chunk_id:
+                seen_chunk_ids.add(chunk_id)
+            if c.get("document_id") != doc_id:
+                provenance_violations += 1
             content = c.get("content", "")
             tok_est = estimate_tokens(content)
             token_lens.append(tok_est)
@@ -85,8 +96,15 @@ class QualityAuditor:
             # OFF-010 & Rule R2 Invariant: page_start must equal page_end
             p_start = c.get("page_start")
             p_end = c.get("page_end")
-            if p_start is not None and p_end is not None and p_start != p_end:
+            if (
+                not isinstance(p_start, int)
+                or not isinstance(p_end, int)
+                or p_start < 1
+                or p_end < 1
+                or p_start != p_end
+            ):
                 rule_r2_violations += 1
+                provenance_violations += 1
 
             stripped = content.strip()
             if not stripped:
@@ -114,6 +132,7 @@ class QualityAuditor:
             "document_id": doc_id,
             "total_chunks": total_chunks,
             "rule_r2_violations": rule_r2_violations,
+            "provenance_violations": provenance_violations,
             "empty_chunks": empty_chunks,
             "header_leak_count": header_leaks,
             "fragment_headings_count": fragment_headings,
@@ -131,84 +150,115 @@ class QualityAuditor:
 
 
 def audit_database(db_url: Optional[str] = None) -> Dict[str, Any]:
-    """Audits database tables for Rule R2 invariants, content completeness, and embedding fidelity."""
+    """Audit persisted rows; connectivity/schema errors are returned, never hidden."""
     target_url = db_url or resolve_database_url()
-    is_sqlite = target_url.startswith("sqlite")
-
-    stats = {
+    stats: Dict[str, Any] = {
         "total_documents": 0,
         "total_chunks": 0,
         "rule_r2_violations": 0,
         "empty_chunks": 0,
         "invalid_embeddings": 0,
         "valid_embeddings": 0,
+        "embedding_rows": 0,
+        "unexplained_empty_source_pages": 0,
+        "source_pages": 0,
+        "database_checked": False,
+        "error": None,
     }
 
-    if is_sqlite:
-        db_file = target_url.replace("sqlite:///", "")
-        if not os.path.exists(db_file):
-            return stats
-        conn = sqlite3.connect(db_file)
-        cur = conn.cursor()
-        try:
-            cur.execute("SELECT COUNT(*) FROM source_files")
-            stats["total_documents"] = cur.fetchone()[0]
-
-            cur.execute("SELECT COUNT(*) FROM chunks")
-            stats["total_chunks"] = cur.fetchone()[0]
-
-            # Rule R2 check: page_start must equal page_end
-            cur.execute("SELECT COUNT(*) FROM chunks WHERE page_start != page_end")
-            stats["rule_r2_violations"] = cur.fetchone()[0]
-
-            # Empty content check
-            cur.execute("SELECT COUNT(*) FROM chunks WHERE content IS NULL OR LENGTH(TRIM(content)) = 0")
-            stats["empty_chunks"] = cur.fetchone()[0]
-
-            # Check embeddings
-            cur.execute("SELECT embedding FROM chunks WHERE embedding IS NOT NULL")
-            for row in cur.fetchall():
-                try:
-                    vec = json.loads(row[0]) if isinstance(row[0], str) else row[0]
-                    if len(vec) == 768:
-                        norm = math.sqrt(sum(x * x for x in vec))
+    try:
+        if target_url.startswith("sqlite:"):
+            db_file = target_url[len("sqlite:///"):]
+            if not os.path.isabs(db_file):
+                db_file = str(Path(db_file).resolve())
+            if not os.path.exists(db_file):
+                raise FileNotFoundError(f"SQLite database does not exist: {db_file}")
+            conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True, timeout=10)
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(*) FROM source_files")
+                stats["total_documents"] = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM chunks")
+                stats["total_chunks"] = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM chunks WHERE page_start IS NULL OR page_end IS NULL OR page_start != page_end")
+                stats["rule_r2_violations"] = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM chunks WHERE content IS NULL OR LENGTH(TRIM(content)) = 0")
+                stats["empty_chunks"] = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM source_pages")
+                stats["source_pages"] = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM source_pages WHERE (content IS NULL OR LENGTH(TRIM(content)) = 0) AND LOWER(extraction_method) != 'verified_blank'")
+                stats["unexplained_empty_source_pages"] = int(cur.fetchone()[0])
+                cur.execute("SELECT embedding FROM chunks WHERE embedding IS NOT NULL")
+                embedding_rows = cur.fetchall()
+                stats["embedding_rows"] = len(embedding_rows)
+                for (raw_vec,) in embedding_rows:
+                    try:
+                        vec = json.loads(raw_vec) if isinstance(raw_vec, str) else raw_vec
+                        if not isinstance(vec, (list, tuple)) or len(vec) != 768:
+                            stats["invalid_embeddings"] += 1
+                            continue
+                        vals = [float(x) for x in vec]
+                        if not all(math.isfinite(x) for x in vals):
+                            stats["invalid_embeddings"] += 1
+                            continue
+                        norm = math.sqrt(sum(x * x for x in vals))
                         if 0.98 <= norm <= 1.02:
                             stats["valid_embeddings"] += 1
                         else:
                             stats["invalid_embeddings"] += 1
-                    else:
+                    except (TypeError, ValueError, json.JSONDecodeError):
                         stats["invalid_embeddings"] += 1
-                except Exception:
-                    stats["invalid_embeddings"] += 1
-        except Exception:
-            pass
-        finally:
-            conn.close()
-    else:
-        # PostgreSQL / AlloyDB check
-        try:
-            import psycopg2
-            clean_url = target_url.replace("postgresql+psycopg2://", "postgresql://")
-            conn = psycopg2.connect(clean_url)
-            cur = conn.cursor()
-            try:
-                cur.execute("SELECT COUNT(*) FROM source_files")
-                stats["total_documents"] = cur.fetchone()[0]
-
-                cur.execute("SELECT COUNT(*) FROM chunks")
-                stats["total_chunks"] = cur.fetchone()[0]
-
-                cur.execute("SELECT COUNT(*) FROM chunks WHERE page_start != page_end")
-                stats["rule_r2_violations"] = cur.fetchone()[0]
-
-                cur.execute("SELECT COUNT(*) FROM chunks WHERE content IS NULL OR LENGTH(TRIM(content)) = 0")
-                stats["empty_chunks"] = cur.fetchone()[0]
-            finally:
                 cur.close()
+            finally:
                 conn.close()
-        except Exception:
-            pass
-
+        else:
+            import psycopg2
+            clean_url = target_url.replace("postgresql+psycopg2://", "postgresql://", 1)
+            conn = psycopg2.connect(clean_url, connect_timeout=10)
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(*) FROM source_files")
+                stats["total_documents"] = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM chunks")
+                stats["total_chunks"] = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM chunks WHERE page_start IS NULL OR page_end IS NULL OR page_start != page_end")
+                stats["rule_r2_violations"] = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM chunks WHERE content IS NULL OR LENGTH(BTRIM(content)) = 0")
+                stats["empty_chunks"] = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM source_pages")
+                stats["source_pages"] = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM source_pages WHERE (content IS NULL OR LENGTH(BTRIM(content)) = 0) AND LOWER(extraction_method) != 'verified_blank'")
+                stats["unexplained_empty_source_pages"] = int(cur.fetchone()[0])
+                cur.execute("SELECT embedding::text FROM chunks WHERE embedding IS NOT NULL")
+                embedding_rows = cur.fetchall()
+                stats["embedding_rows"] = len(embedding_rows)
+                for (raw_vec,) in embedding_rows:
+                    try:
+                        if isinstance(raw_vec, str):
+                            body = raw_vec.strip().strip("[]")
+                            vec = [float(x.strip()) for x in body.split(",") if x.strip()]
+                        else:
+                            vec = raw_vec
+                        if not isinstance(vec, (list, tuple)) or len(vec) != 768:
+                            stats["invalid_embeddings"] += 1
+                            continue
+                        vals = [float(x) for x in vec]
+                        if not all(math.isfinite(x) for x in vals):
+                            stats["invalid_embeddings"] += 1
+                            continue
+                        norm = math.sqrt(sum(x * x for x in vals))
+                        if 0.98 <= norm <= 1.02:
+                            stats["valid_embeddings"] += 1
+                        else:
+                            stats["invalid_embeddings"] += 1
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        stats["invalid_embeddings"] += 1
+                cur.close()
+            finally:
+                conn.close()
+        stats["database_checked"] = True
+    except Exception as exc:
+        stats["error"] = f"{type(exc).__name__}: {exc}"
     return stats
 
 
@@ -216,78 +266,96 @@ def run_quality_audit(
     chunks_dir: Optional[Path] = None,
     db_url: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Executes all production quality gates and returns a certified audit summary.
-    Enforces OFF-010: Fails closed if any mandatory invariant is violated.
-    """
-    cdir = chunks_dir or config.chunks_dir
+    """Run fail-closed quality gates. Missing data, unreadable files, and DB errors block release."""
+    cdir = Path(chunks_dir or config.chunks_dir)
     auditor = QualityAuditor(chunks_dir=cdir)
-    file_results = auditor.audit_all()
+    file_results: List[Dict[str, Any]] = []
+    file_errors: List[str] = []
+    if not cdir.exists():
+        file_errors.append(f"Chunk directory does not exist: {cdir}")
+    else:
+        for chunk_file in sorted(cdir.glob("*_chunks.json")):
+            try:
+                result = auditor.audit_file(chunk_file)
+                file_results.append(result)
+                if result.get("error"):
+                    file_errors.append(f"{chunk_file.name}: {result['error']}")
+            except Exception as exc:
+                file_errors.append(f"{chunk_file.name}: {type(exc).__name__}: {exc}")
 
-    total_chunks = sum(r.get("total_chunks", 0) for r in file_results)
-    total_r2_violations = sum(r.get("rule_r2_violations", 0) for r in file_results)
-    total_empty_chunks = sum(r.get("empty_chunks", 0) for r in file_results)
-    total_header_leaks = sum(r.get("header_leak_count", 0) for r in file_results)
-
-    # Check database persistence
+    total_chunks = sum(int(r.get("total_chunks", 0)) for r in file_results)
+    total_r2_violations = sum(int(r.get("rule_r2_violations", 0)) for r in file_results)
+    total_provenance_violations = sum(int(r.get("provenance_violations", 0)) for r in file_results)
+    total_empty_chunks = sum(int(r.get("empty_chunks", 0)) for r in file_results)
+    total_header_leaks = sum(int(r.get("header_leak_count", 0)) for r in file_results)
     db_stats = audit_database(db_url)
-    if db_stats["total_chunks"] > 0:
-        total_chunks = max(total_chunks, db_stats["total_chunks"])
-        total_r2_violations += db_stats["rule_r2_violations"]
-        total_empty_chunks += db_stats["empty_chunks"]
 
-    # Evaluate gates
-    gate_r2_pass = (total_r2_violations == 0)
-    gate_content_pass = (total_empty_chunks == 0)
-    gate_header_pass = (total_header_leaks == 0 or (total_header_leaks / max(1, total_chunks)) < 0.01)
-    gate_embedding_pass = (db_stats["invalid_embeddings"] == 0)
-    gate_provenance_pass = True
+    # Do not double-count file and DB findings: each source is checked independently.
+    db_r2_violations = int(db_stats.get("rule_r2_violations", 0))
+    db_empty_chunks = int(db_stats.get("empty_chunks", 0))
+    db_total_chunks = int(db_stats.get("total_chunks", 0))
+    total_chunks = max(total_chunks, db_total_chunks)
 
-    # OFF-003: Verify GCS discovery contract and API methods
-    gcs_contract = GCSDataLoader.verify_contract()
-    gate_gcs_pass = bool(gcs_contract.get("passed", False))
-
-    all_passed = bool(
-        gate_r2_pass
-        and gate_content_pass
-        and gate_header_pass
-        and gate_embedding_pass
-        and gate_gcs_pass
+    has_auditable_data = total_chunks > 0 and (len(file_results) > 0 or db_total_chunks > 0)
+    gate_r2_pass = total_r2_violations == 0 and db_r2_violations == 0
+    unexplained_empty_pages = int(db_stats.get("unexplained_empty_source_pages", 0))
+    gate_content_pass = total_empty_chunks == 0 and db_empty_chunks == 0 and unexplained_empty_pages == 0 and not file_errors
+    gate_header_pass = total_header_leaks == 0 or (total_header_leaks / max(1, total_chunks)) < 0.01
+    # A missing database or unreadable database is not a zero-error pass.
+    gate_database_pass = bool(db_stats.get("database_checked")) and db_total_chunks > 0
+    # For a populated database, every non-null embedding checked must be valid.
+    gate_embedding_pass = (
+        gate_database_pass
+        and int(db_stats.get("invalid_embeddings", 0)) == 0
+        and int(db_stats.get("embedding_rows", 0)) == db_total_chunks
+        and int(db_stats.get("valid_embeddings", 0)) == db_total_chunks
     )
+    gate_provenance_pass = has_auditable_data and not file_errors and total_provenance_violations == 0
+
+    def status(passed: bool) -> str:
+        return "PASSED" if passed else "FAILED"
 
     quality_checks = {
+        "AUDITABLE_CORPUS_PRESENT": {
+            "status": status(has_auditable_data),
+            "detail": f"Chunk files: {len(file_results)}, chunks observed: {total_chunks}; at least one persisted/auditable chunk is required.",
+        },
         "RULE_R2_SINGLE_PAGE": {
-            "status": "PASSED" if gate_r2_pass else "FAILED",
-            "detail": f"Violations: {total_r2_violations} across {total_chunks:,} chunks (Invariant: page_start == page_end)"
+            "status": status(gate_r2_pass),
+            "detail": f"File violations: {total_r2_violations}; database violations: {db_r2_violations}; page_start must equal page_end.",
         },
         "CHUNK_CONTENT_COMPLETENESS": {
-            "status": "PASSED" if gate_content_pass else "FAILED",
-            "detail": f"Empty chunks: {total_empty_chunks} across {total_chunks:,} chunks"
+            "status": status(gate_content_pass),
+            "detail": f"Empty file chunks: {total_empty_chunks}; empty database chunks: {db_empty_chunks}; unexplained empty source pages: {unexplained_empty_pages}; file errors: {len(file_errors)}.",
         },
         "HEADER_STRIPPING_PURITY": {
-            "status": "PASSED" if gate_header_pass else "FAILED",
-            "detail": f"Header leaks: {total_header_leaks} (Rate: {(total_header_leaks / max(1, total_chunks)) * 100:.2f}%)"
+            "status": status(gate_header_pass),
+            "detail": f"Header leaks: {total_header_leaks} (rate: {(total_header_leaks / max(1, total_chunks)) * 100:.2f}%).",
+        },
+        "DATABASE_PERSISTENCE": {
+            "status": status(gate_database_pass),
+            "detail": (f"Database checked; documents={db_stats['total_documents']}, chunks={db_total_chunks}." if gate_database_pass
+                       else f"Database unavailable, empty, or unverified: {db_stats.get('error') or 'no persisted chunks found'}"),
         },
         "EMBEDDING_FIDELITY": {
-            "status": "PASSED" if gate_embedding_pass else "FAILED",
-            "detail": f"Valid vectors: {db_stats['valid_embeddings']}, Invalid: {db_stats['invalid_embeddings']} (768-dim, ||v|| ~ 1.0)"
+            "status": status(gate_embedding_pass),
+            "detail": f"Valid vectors: {db_stats['valid_embeddings']}; invalid vectors: {db_stats['invalid_embeddings']}; vector rows: {db_stats['embedding_rows']} / {db_total_chunks} chunks.",
         },
         "PROVENANCE_INTEGRITY": {
-            "status": "PASSED" if gate_provenance_pass else "FAILED",
-            "detail": f"Verified document metadata and page tracking across {len(file_results)} files"
+            "status": status(gate_provenance_pass),
+            "detail": (f"Audited {len(file_results)} chunk files; file errors: {file_errors[:3]}" if not gate_provenance_pass
+                       else f"Audited {len(file_results)} chunk files; provenance violations: {total_provenance_violations}."),
         },
-        "GCS_DISCOVERY_CONTRACT": {
-            "status": "PASSED" if gate_gcs_pass else "FAILED",
-            "detail": gcs_contract.get("detail", "Verified GCS discovery API contract")
-        }
     }
-
+    all_passed = all(item["status"] == "PASSED" for item in quality_checks.values())
     return {
         "all_passed": all_passed,
         "all_strict_passed": all_passed,
         "total_chunks_audited": total_chunks,
         "total_documents_audited": len(file_results),
-        "quality_checks": quality_checks
+        "database_stats": db_stats,
+        "file_errors": file_errors,
+        "quality_checks": quality_checks,
     }
 
 

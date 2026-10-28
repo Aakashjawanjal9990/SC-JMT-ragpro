@@ -22,58 +22,56 @@ try:
     else:
         load_dotenv()
 except ImportError:
-    pass
-
-PROJECT_ROOT = Path(__file__).resolve().parent
-PCEV2_ROOT = PROJECT_ROOT
+    PCEV2_ROOT = Path(__file__).resolve().parent
 
 
-def resolve_database_url(
-    pcev2_root: Optional[Path] = None,
-    target: Optional[str] = None,
-    project_root: Optional[Path] = None
-) -> str:
+def resolve_database_url(pcev2_root: Optional[Path] = None, target: Optional[str] = None) -> str:
+    """Resolve a database URL without silently crossing local/production targets.
+
+    `target="local"` always resolves to SQLite unless an explicit SQLite URL is
+    supplied. Production PostgreSQL requires an explicit URL or complete
+    credential set; there are no baked-in production credentials.
     """
-    Resolves database URL from DATABASE_TARGET, DATABASE_URL, or individual DB_* credentials.
-    Uses URL-encoding (quote_plus) to safely handle reserved characters (e.g., '@' in passwords).
-    Enforces configurable TLS sslmode policy for remote PostgreSQL / AlloyDB connections.
-    Defaults safely to local SQLite in output/scj_rag_v2.db when no cloud credentials provided.
-    """
-    root = project_root or pcev2_root or PROJECT_ROOT
-    active_target = (target or os.getenv("DATABASE_TARGET", "")).lower()
-    sslmode = os.getenv("DB_SSLMODE", "prefer")
+    root = pcev2_root or PCEV2_ROOT
+    active_target = (target or os.getenv("DATABASE_TARGET", "local")).strip().lower()
+    sqlite_default = f"sqlite:///{(root / 'output' / 'scj_rag_v2.db').as_posix()}"
+
+    if active_target in ("local", "sqlite", "development", "dev", "test"):
+        configured = os.getenv("DATABASE_URL", "").strip()
+        # Never let a PostgreSQL DATABASE_URL silently redirect a local run.
+        if configured.startswith("sqlite:"):
+            return configured
+        return sqlite_default
 
     if active_target in ("alloydb", "postgres", "postgresql", "prod", "production"):
-        alloy_url = os.getenv("ALLOYDB_DATABASE_URL")
+        alloy_url = os.getenv("ALLOYDB_DATABASE_URL", "").strip()
         if alloy_url:
+            if not alloy_url.startswith(("postgresql://", "postgres://", "postgresql+psycopg2://")):
+                raise ValueError("ALLOYDB_DATABASE_URL must be a PostgreSQL URL.")
             return alloy_url
+
         db_user = os.getenv("DB_USER")
         db_pass = os.getenv("DB_PASSWORD")
         db_host = os.getenv("DB_HOST")
         db_port = os.getenv("DB_PORT", "5432")
         db_name = os.getenv("DB_NAME")
-        if not (db_user and db_pass and db_host and db_name):
-            raise ValueError("Target 'alloydb' requested but DB_USER, DB_PASSWORD, DB_HOST, or DB_NAME is missing in environment.")
+        if not all((db_user, db_pass, db_host, db_name)):
+            raise ValueError(
+                "AlloyDB target requires ALLOYDB_DATABASE_URL or explicit DB_USER, "
+                "DB_PASSWORD, DB_HOST, and DB_NAME environment variables."
+            )
+        from urllib.parse import quote_plus
+        enc_user = quote_plus(db_user)
         enc_pass = quote_plus(db_pass)
-        return f"postgresql+psycopg2://{db_user}:{enc_pass}@{db_host}:{db_port}/{db_name}?sslmode={sslmode}"
+        sslmode = os.getenv("DB_SSLMODE", "require").strip().lower()
+        allowed_sslmodes = {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+        if sslmode not in allowed_sslmodes:
+            raise ValueError(f"Unsupported DB_SSLMODE value: {sslmode!r}")
+        if sslmode == "disable":
+            raise ValueError("TLS cannot be disabled for the AlloyDB target.")
+        return f"postgresql+psycopg2://{enc_user}:{enc_pass}@{db_host}:{db_port}/{db_name}?sslmode={sslmode}"
 
-    db_url = os.getenv("DATABASE_URL")
-    if db_url:
-        return db_url
-
-    # Check if individual AlloyDB / PostgreSQL credentials are provided
-    db_user = os.getenv("DB_USER")
-    db_pass = os.getenv("DB_PASSWORD")
-    db_host = os.getenv("DB_HOST")
-    db_port = os.getenv("DB_PORT", "5432")
-    db_name = os.getenv("DB_NAME")
-
-    if db_user and db_pass and db_host and db_name:
-        enc_pass = quote_plus(db_pass)
-        return f"postgresql+psycopg2://{db_user}:{enc_pass}@{db_host}:{db_port}/{db_name}?sslmode={sslmode}"
-
-    # Default to local SQLite database in output directory
-    return f"sqlite:///{(root / 'output' / 'scj_rag_v2.db').as_posix()}"
+    raise ValueError(f"Unsupported database target: {active_target!r}")
 
 
 @dataclass
@@ -85,9 +83,9 @@ class PipelineConfig:
     allow_mock_embeddings: bool = os.getenv("ALLOW_MOCK_EMBEDDINGS", "false").lower() in ("true", "1", "yes")
 
     # Google Cloud Platform (GCP) & Cloud Storage (GCS)
-    gcp_project: str = os.getenv("GCP_PROJECT", "sc-judgments-dev")
+    gcp_project: str = os.getenv("GCP_PROJECT", "").strip()
     gcp_location: str = os.getenv("GCP_LOCATION", "us-central1")
-    gcs_bucket: str = os.getenv("GCS_BUCKET", "sc-judgments-dev-data")
+    gcs_bucket: str = os.getenv("GCS_BUCKET", "").strip()
     gcs_prefix: str = os.getenv("GCS_PREFIX", "raw_pdfs/pdfs")
 
     # Vertex AI Embedding Engine
@@ -144,6 +142,35 @@ class PipelineConfig:
     default_ingestion_workers: int = int(os.getenv("DEFAULT_INGESTION_WORKERS", "6"))
     overlap_sentences: int = 1
     recurrence_threshold: float = 0.30
+
+    def validate_runtime(self, target: str = "local", require_gcs: bool = False) -> None:
+        """Validate deployment-critical configuration before ingestion starts.
+
+        Local SQLite runs may use development defaults. Cloud/production runs
+        must explicitly configure their cloud resources and real embedding model.
+        """
+        active_target = (target or "local").strip().lower()
+        production = active_target in {"alloydb", "postgres", "postgresql", "prod", "production"}
+        errors = []
+
+        if require_gcs or production:
+            if not self.gcp_project or self.gcp_project.lower().startswith(("your-", "<", "replace-me")):
+                errors.append("GCP_PROJECT must contain a real project ID for GCS or production ingestion.")
+            if not self.gcs_bucket or self.gcs_bucket.lower().startswith(("your-", "<", "replace-me")):
+                errors.append("GCS_BUCKET must contain a real bucket name for GCS or production ingestion.")
+        if production:
+            required_env = {
+                "EMBEDDING_PROVIDER": self.embedding_provider,
+                "EMBEDDING_MODEL_ID": self.embedding_model_id,
+                "EMBEDDING_DIMENSION": str(self.embedding_dimension),
+            }
+            for key, value in required_env.items():
+                if not os.getenv(key, "").strip():
+                    errors.append(f"{key} must be explicitly configured for production.")
+            if self.allow_mock_embeddings:
+                errors.append("ALLOW_MOCK_EMBEDDINGS must be false for production ingestion.")
+        if errors:
+            raise ValueError("Invalid runtime configuration: " + " ".join(errors))
 
     def __post_init__(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)

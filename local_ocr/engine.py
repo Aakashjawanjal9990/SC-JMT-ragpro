@@ -159,6 +159,8 @@ class LocalOCREngine:
         t0 = time.time()
 
         if allow_mock:
+            if os.getenv("ENVIRONMENT", "development").strip().lower() in {"production", "prod"}:
+                raise RuntimeError("Mock OCR is prohibited in production.")
             mock_text = (
                 "SUPREME COURT OF INDIA\n"
                 "Petitioner v. State of Orissa\n"
@@ -251,6 +253,8 @@ class LocalOCREngine:
         t0 = time.time()
 
         if allow_mock:
+            if os.getenv("ENVIRONMENT", "development").strip().lower() in {"production", "prod"}:
+                raise RuntimeError("Mock document-structure output is prohibited in production.")
             mock_md = (
                 "# Supreme Court of India\n\n"
                 "## Order of the Court\n\n"
