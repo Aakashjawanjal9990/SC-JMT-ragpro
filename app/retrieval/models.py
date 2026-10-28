@@ -44,14 +44,6 @@ class RetrievedChunk:
     fusion_score: float | None = None
     rerank_score: float | None = None
 
-    @property
-    def document_id(self) -> str | None:
-        return self.metadata.get(DOCUMENT_ID)
-
-    @property
-    def pages(self) -> list[int]:
-        return page_range(self.metadata) or []
-
 
 def page_range(metadata: Mapping[str, Any]) -> list[int] | None:
     """One-based pages from the inclusive page_start..page_end range, or None if invalid

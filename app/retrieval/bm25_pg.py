@@ -1,7 +1,7 @@
 """Read-only BM25 search over the index stored in its own Postgres database (AlloyDB).
 
-The index is built and refreshed by a separate cloud job (bm25_builder/), not by this
-module. It stores each chunk's text and pages, so search returns complete chunks,
+The index is built and refreshed by a separate cloud job (the BM25 build job), not by
+this module. It stores each chunk's text and pages, so search returns complete chunks,
 like the vector search, with no lookup in the vector database.
 
 Index contract the build job must produce (schema `bm25.schema` in config.yaml):
@@ -36,11 +36,11 @@ from app.retrieval.models import (
     SOURCE_PDF_ID,
     RetrievedChunk,
 )
-from app.retrieval.tokenizer import TOKENIZER_VERSION, tokenize
+from app.retrieval.tokenizer import TOKENIZER_VERSION
 
 _SCHEMA = re.compile(r"^[a-z_][a-z0-9_]{0,40}$")
 
-INDEX_FORMAT = "3"  # chunks carries content and pages, plus terms(df); must match bm25_builder/
+INDEX_FORMAT = "3"  # chunks carries content and pages, plus terms(df); must match the build job
 
 
 class PostgresBM25Index:
@@ -74,14 +74,6 @@ class PostgresBM25Index:
             )
         return meta
 
-    def __len__(self) -> int:
-        return int(self.meta.get("num_chunks", 0))
-
-    def search(self, query: str, k: int) -> list[RetrievedChunk]:
-        """Top-k chunks with text, pages and BM25 score. Only chunks containing a query
-        term can match."""
-        return self.search_weighted({term: 1.0 for term in tokenize(query)}, k)
-
     def idf(self, terms: Iterable[str]) -> dict[str, float]:
         """Lucene idf of each term in the index (terms not in the index are left out)."""
         terms = sorted(set(terms))
@@ -95,8 +87,9 @@ class PostgresBM25Index:
         return {term: math.log(1 + (n - df + 0.5) / (df + 0.5)) for term, df in rows}
 
     def search_weighted(self, term_weights: Mapping[str, float], k: int) -> list[RetrievedChunk]:
-        """Like search(), with a weight per query term: a chunk's score is the sum of
-        weight * BM25 contribution over the terms it contains."""
+        """Top-k chunks with text, pages and BM25 score. Only chunks containing a query
+        term can match; a chunk's score is the sum of weight * BM25 contribution over
+        the terms it contains."""
         terms = sorted(term for term, weight in term_weights.items() if weight > 0)
         if not terms or k <= 0:
             return []

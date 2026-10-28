@@ -49,9 +49,6 @@ class RetrievalResult:
     query: str
     chunks: list[RetrievedChunk]
     timings_ms: dict[str, float] = field(default_factory=dict)
-    # For inspection only (derived from the question, so never logged).
-    pseudo_passage: str | None = None
-    expansion_terms: dict[str, float] = field(default_factory=dict)
 
 
 def rank_fusion(*rankings: Sequence[str], k: int = 60) -> dict[str, float]:
@@ -206,22 +203,16 @@ class HybridRetriever:
         for database in self._databases:
             database.close()
 
-    def __enter__(self) -> "HybridRetriever":
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        self.close()
-
     def _bm25_search(self, query: str, k: int):
-        """BM25 hits, timings and the expansion terms used (empty if PRF is off or
-        found nothing). If feedback fails, the first-pass hits are returned."""
+        """BM25 hits and timings, with pseudo-relevance feedback if enabled. If feedback
+        fails, the first-pass hits are returned."""
         timings: dict[str, float] = {}
         start = time.perf_counter()
         weights = {term: 1.0 for term in tokenize(query)}
         hits = self.bm25.search_weighted(weights, k)
         timings["bm25"] = _ms(start)
         if not self.prf_docs or not hits:
-            return hits, timings, {}
+            return hits, timings
         start = time.perf_counter()
         try:
             expansion = prf_terms(
@@ -233,18 +224,17 @@ class HybridRetriever:
                 hits = self.bm25.search_weighted(expanded, k)
         except Exception as exc:
             logger.warning("BM25 pseudo-relevance feedback failed; using first-pass hits: %r", exc)
-            expansion = {}
         timings["prf"] = _ms(start)
-        return hits, timings, expansion
+        return hits, timings
 
     def _query_vector(self, query: str, pseudo_job: Future | None, timings: dict[str, float]):
         """The question's embedding, mixed with the pseudo passage's document embedding
-        when one was produced in time. Returns (vector, passage or None)."""
+        when one was produced in time."""
         start = time.perf_counter()
         vector = self.embedder.embed(query)
         timings["embed"] = _ms(start)
         if pseudo_job is None:
-            return vector, None
+            return vector
         start = time.perf_counter()
         try:
             passage = pseudo_job.result(timeout=self.pseudo_query.timeout_seconds)
@@ -255,9 +245,9 @@ class HybridRetriever:
         except Exception as exc:
             pseudo_job.cancel()
             logger.warning("Pseudo query embedding failed; using the question only: %r", exc)
-            return vector, None
+            return vector
         mixed = (1 - self.pseudo_weight) * vector + self.pseudo_weight * pseudo_vector
-        return (mixed / max(float(np.linalg.norm(mixed)), 1e-12)).astype(np.float32), passage
+        return (mixed / max(float(np.linalg.norm(mixed)), 1e-12)).astype(np.float32)
 
     def _rerank(self, query: str, pool: list[RetrievedChunk]) -> list[float] | None:
         """Ranking API scores for `pool`, or None (fused order is kept) if it fails."""
@@ -287,7 +277,7 @@ class HybridRetriever:
             else None
         )
         try:
-            vector, passage = self._query_vector(query, pseudo_job, timings)
+            vector = self._query_vector(query, pseudo_job, timings)
             start = time.perf_counter()
             vector_hits = self.store.search(vector, candidate_k)
             timings["vector"] = _ms(start)
@@ -296,7 +286,7 @@ class HybridRetriever:
             if pseudo_job is not None:
                 pseudo_job.cancel()
             raise
-        bm25_hits, bm25_timings, expansion = bm25_job.result()
+        bm25_hits, bm25_timings = bm25_job.result()
         timings.update(bm25_timings)
 
         # 2. Merge (each chunk once) and fuse both rankings.
@@ -346,4 +336,4 @@ class HybridRetriever:
             for chunk, score, final in decayed[:top_k]
         ]
         timings["total"] = _ms(total_start)
-        return RetrievalResult(query, selected, timings, passage, expansion)
+        return RetrievalResult(query, selected, timings)

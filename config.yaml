@@ -1,5 +1,4 @@
-# Retrieval configuration, read by the backend's retrieval module (app/retrieval/config.py)
-# and by the BM25 build job (bm25_builder/main.py).
+# Retrieval configuration, read by the backend's retrieval module (app/retrieval/config.py).
 #
 # Path: $RETRIEVAL_CONFIG if set, otherwise this file. On Cloud Run you can mount a
 # per-environment copy (e.g. from Secret Manager as a volume) and point RETRIEVAL_CONFIG at it.
@@ -24,7 +23,7 @@ databases:
     pool_size: 5
     statement_timeout_ms: 5000
 
-  # AlloyDB: the BM25 index, built by bm25_builder/ (a Cloud Run Job).
+  # AlloyDB: the BM25 index, built by the separate BM25 build job.
   bm25:
     name: bm25
     user: postgres
@@ -100,12 +99,3 @@ retrieval:
   doc_decay: 0.85              # score x0.85 per earlier chunk of the same judgment; 1.0 = no penalty
   rrf_k: 60                    # reciprocal rank fusion constant
   timeout_seconds: 10          # deadline for one retrieve() call
-
-# Used only by bm25_builder/.
-bm25_builder:
-  k1: 1.2
-  b: 0.75
-  batch_size: 5000             # source rows per read
-  copy_batch_rows: 200000      # rows per COPY into AlloyDB
-  min_keep_ratio: 0.5          # refuse to replace an index with one below this fraction of its size
-  allow_shrink: false          # true = override min_keep_ratio deliberately

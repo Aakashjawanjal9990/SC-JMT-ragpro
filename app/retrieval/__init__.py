@@ -6,12 +6,11 @@ backend uses AnswerPortAdapter (LLM answer + passages) or RetrievalPortAdapter
 from app.retrieval.answer_adapter import AnswerPortAdapter
 from app.retrieval.config import load_config
 from app.retrieval.hybrid import HybridRetriever, RetrievalResult
-from app.retrieval.models import Chunk, RetrievedChunk
+from app.retrieval.models import RetrievedChunk
 from app.retrieval.port_adapter import RetrievalPortAdapter
 
 __all__ = [
     "AnswerPortAdapter",
-    "Chunk",
     "HybridRetriever",
     "RetrievalPortAdapter",
     "RetrievalResult",
