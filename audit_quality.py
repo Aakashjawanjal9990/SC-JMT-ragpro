@@ -20,6 +20,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 from config import config, resolve_database_url
+from storage.gcs_loader import GCSDataLoader
 
 
 def estimate_tokens(text: str) -> int:
@@ -242,7 +243,17 @@ def run_quality_audit(
     gate_embedding_pass = (db_stats["invalid_embeddings"] == 0)
     gate_provenance_pass = True
 
-    all_passed = bool(gate_r2_pass and gate_content_pass and gate_header_pass and gate_embedding_pass)
+    # OFF-003: Verify GCS discovery contract and API methods
+    gcs_contract = GCSDataLoader.verify_contract()
+    gate_gcs_pass = bool(gcs_contract.get("passed", False))
+
+    all_passed = bool(
+        gate_r2_pass
+        and gate_content_pass
+        and gate_header_pass
+        and gate_embedding_pass
+        and gate_gcs_pass
+    )
 
     quality_checks = {
         "RULE_R2_SINGLE_PAGE": {
@@ -264,6 +275,10 @@ def run_quality_audit(
         "PROVENANCE_INTEGRITY": {
             "status": "PASSED" if gate_provenance_pass else "FAILED",
             "detail": f"Verified document metadata and page tracking across {len(file_results)} files"
+        },
+        "GCS_DISCOVERY_CONTRACT": {
+            "status": "PASSED" if gate_gcs_pass else "FAILED",
+            "detail": gcs_contract.get("detail", "Verified GCS discovery API contract")
         }
     }
 

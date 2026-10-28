@@ -120,7 +120,10 @@ def main():
         if not gcs_loader.is_available():
             raise RuntimeError(f"Cannot stream from GCS: Client or bucket '{gcs_loader.bucket_name}' is unavailable.")
 
-        uris = gcs_loader.list_available_pdfs(year=args.year)
+        if args.year is not None:
+            uris = gcs_loader.list_year_pdfs(year=args.year)
+        else:
+            uris = gcs_loader.list_available_pdfs(year=None)
         if args.limit:
             uris = uris[:args.limit]
         for uri in uris:
