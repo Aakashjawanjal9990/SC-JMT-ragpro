@@ -22,14 +22,19 @@ function VerifyStep({ email, onBack }) {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [resendBusy, setResendBusy] = useState(false);
   const [left, restart] = useCountdown(30);
 
   const submit = async (e) => {
     e.preventDefault();
+
     const invalid = validateCode(code);
     setError(invalid);
-    if (invalid) return;
+
+    if (invalid || busy) return;
+
     setBusy(true);
+
     try {
       await verify(email, code);
       navigate('/home', { replace: true });
@@ -41,11 +46,18 @@ function VerifyStep({ email, onBack }) {
   };
 
   const resend = async () => {
-    restart();
+    if (resendBusy || left > 0) return;
+
+    setResendBusy(true);
+    setError('');
+
     try {
       await api.resend(email);
+      restart();
     } catch (err) {
       setError(err.message);
+    } finally {
+      setResendBusy(false);
     }
   };
 
@@ -61,8 +73,13 @@ function VerifyStep({ email, onBack }) {
           {left > 0 ? (
             `Resend code in ${left}s`
           ) : (
-            <button type="button" className="linkbtn" onClick={resend}>
-              Resend code
+            <button
+              type="button"
+              className="linkbtn"
+              onClick={resend}
+              disabled={resendBusy}
+            >
+              {resendBusy ? 'Sending…' : 'Resend code'}
             </button>
           )}
           <span className="fineprint">
@@ -109,8 +126,12 @@ export default function Register() {
 
   const set = (key) => (e) => {
     setForm({ ...form, [key]: e.target.value });
-    if (errors[key]) setErrors({ ...errors, [key]: '' });
+
+    if (errors[key]) {
+      setErrors({ ...errors, [key]: '' });
+    }
   };
+
   const validateOne = (key) => () =>
     setErrors((prev) => ({
       ...prev,
@@ -120,25 +141,38 @@ export default function Register() {
   const submit = async (e) => {
     e.preventDefault();
     setFormError('');
+
+    if (busy) return;
+
     const next = {};
+
     Object.keys(rules).forEach((key) => {
       const message = rules[key](form[key]);
       if (message) next[key] = message;
     });
+
     if (!agree) next.agree = 'Please confirm to continue.';
+
     setErrors(next);
+
     if (Object.keys(next).length) return;
 
     const email = form.email.trim().toLowerCase();
+
     setBusy(true);
+
     try {
       const result = await register({
         name: form.name.trim(),
         email,
         password: form.password,
       });
-      if (result.verified) navigate('/home', { replace: true });
-      else setPendingEmail(email);
+
+      if (result.verified) {
+        navigate('/home', { replace: true });
+      } else {
+        setPendingEmail(email);
+      }
     } catch (err) {
       setFormError(err.message);
     } finally {
@@ -173,6 +207,7 @@ export default function Register() {
         onBlur={validateOne('name')}
         error={errors.name}
       />
+
       <TextField
         label="Email address"
         type="email"
@@ -182,6 +217,7 @@ export default function Register() {
         onBlur={validateOne('email')}
         error={errors.email}
       />
+
       <TextField
         label="Password"
         type="password"
@@ -192,6 +228,7 @@ export default function Register() {
         error={errors.password}
         hint="Use at least 8 characters with a letter and a number."
       />
+
       <TextField
         label="Confirm password"
         type="password"
@@ -214,6 +251,7 @@ export default function Register() {
         I understand that Nyaya-Mitra provides research assistance, not legal
         advice.
       </label>
+
       {errors.agree && <span className="field-error">{errors.agree}</span>}
 
       {formError && (
@@ -221,6 +259,7 @@ export default function Register() {
           {formError}
         </div>
       )}
+
       <PrimaryButton type="submit" loading={busy} disabled={busy}>
         Create Account
       </PrimaryButton>

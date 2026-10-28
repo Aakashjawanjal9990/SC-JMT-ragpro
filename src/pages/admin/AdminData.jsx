@@ -1,16 +1,19 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api';
 
 const isoDay = (d) =>
   [d.getFullYear(), d.getMonth() + 1, d.getDate()]
     .map((n) => String(n).padStart(2, '0'))
     .join('-');
+
 const today = () => isoDay(new Date());
+
 const daysAgo = (days) => {
   const d = new Date();
   d.setDate(d.getDate() - days);
   return isoDay(d);
 };
+
 const dateFmt = (value) =>
   value ? new Date(value).toLocaleString('en-IN') : 'Not recorded';
 
@@ -54,7 +57,9 @@ function Trend({ data }) {
       <p className="muted">No query events recorded for this date range.</p>
     );
   }
+
   const max = Math.max(...data.map((item) => item.queries), 1);
+
   const points = data
     .map((item, index) => {
       const x = data.length === 1 ? 300 : (index / (data.length - 1)) * 600;
@@ -62,6 +67,7 @@ function Trend({ data }) {
       return `${x},${y}`;
     })
     .join(' ');
+
   return (
     <div className="admin-trend">
       <svg viewBox="0 0 600 160" role="img" aria-label="Daily query activity">
@@ -72,6 +78,7 @@ function Trend({ data }) {
           strokeWidth="3"
         />
       </svg>
+
       <div className="admin-trend-labels">
         {data.map((item) => (
           <span key={item.date}>
@@ -91,33 +98,83 @@ export default function AdminData() {
   const [status, setStatus] = useState('all');
   const [start, setStart] = useState(() => daysAgo(6));
   const [end, setEnd] = useState(today);
+
   const [users, setUsers] = useState(null);
   const [activity, setActivity] = useState(null);
   const [sessions, setSessions] = useState(null);
   const [analytics, setAnalytics] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
 
-  const load = useCallback(() => {
+  const [loading, setLoading] = useState(true);
+  const [errors, setErrors] = useState({});
+  const loadGeneration = useRef(0);
+
+  const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
+
     setLoading(true);
-    setError('');
-    Promise.all([
+    setErrors({});
+
+    const results = await Promise.allSettled([
       api.adminUsers({ page, pageSize, search, status }),
       api.adminAuthActivity(),
       api.adminSessions(),
       api.adminAnalytics(start, end),
-    ])
-      .then(([userData, activityData, sessionData, analyticsData]) => {
-        setUsers(userData);
-        setActivity(activityData);
-        setSessions(sessionData);
-        setAnalytics(analyticsData);
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+    ]);
+
+    // Do not apply results from an older filter or request.
+    if (generation !== loadGeneration.current) return;
+
+    const nextErrors = {};
+
+    const [usersResult, activityResult, sessionsResult, analyticsResult] =
+      results;
+
+    if (usersResult.status === 'fulfilled') {
+      setUsers(usersResult.value);
+    } else {
+      nextErrors.users =
+        usersResult.reason?.message || 'Could not load user management data.';
+    }
+
+    if (activityResult.status === 'fulfilled') {
+      setActivity(activityResult.value);
+    } else {
+      nextErrors.activity =
+        activityResult.reason?.message ||
+        'Could not load authentication activity.';
+    }
+
+    if (sessionsResult.status === 'fulfilled') {
+      setSessions(sessionsResult.value);
+    } else {
+      nextErrors.sessions =
+        sessionsResult.reason?.message || 'Could not load session data.';
+    }
+
+    if (analyticsResult.status === 'fulfilled') {
+      setAnalytics(analyticsResult.value);
+    } else {
+      nextErrors.analytics =
+        analyticsResult.reason?.message || 'Could not load analytics.';
+    }
+
+    setErrors(nextErrors);
+    setLoading(false);
   }, [page, pageSize, search, status, start, end]);
 
-  useEffect(load, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const panelError = (key) =>
+    errors[key] ? (
+      <div className="error" role="alert">
+        <p>{errors[key]}</p>
+        <button className="ghost" type="button" onClick={load}>
+          Retry
+        </button>
+      </div>
+    ) : null;
 
   const searchUsers = (event) => {
     event.preventDefault();
@@ -127,11 +184,6 @@ export default function AdminData() {
 
   return (
     <section className="admin-data">
-      {error && (
-        <div className="error" role="alert">
-          {error}
-        </div>
-      )}
       {loading && (
         <p className="muted" aria-live="polite">
           Loading admin data…
@@ -140,6 +192,9 @@ export default function AdminData() {
 
       <section className="card pad">
         <h3>User management</h3>
+
+        {panelError('users')}
+
         <form className="admin-filters" onSubmit={searchUsers}>
           <input
             aria-label="Search users"
@@ -147,6 +202,7 @@ export default function AdminData() {
             value={searchInput}
             onChange={(event) => setSearchInput(event.target.value)}
           />
+
           <select
             aria-label="Filter account status"
             value={status}
@@ -160,13 +216,21 @@ export default function AdminData() {
             <option value="pending">Pending</option>
             <option value="disabled">Disabled</option>
           </select>
+
           <button className="ghost" type="submit">
             Search
           </button>
         </form>
+
         <Table
           headers={['User ID', 'Name', 'Email', 'Registered', 'Status']}
-          empty={loading ? 'Loading users…' : 'No matching users.'}
+          empty={
+            errors.users
+              ? 'User data could not be loaded.'
+              : loading
+                ? 'Loading users…'
+                : 'No matching users.'
+          }
           rows={(users?.items || []).map((user) => (
             <tr key={user.id}>
               <td>{user.id}</td>
@@ -177,8 +241,10 @@ export default function AdminData() {
             </tr>
           ))}
         />
+
         <div className="admin-pagination">
           <span className="muted">{users?.total ?? 0} users</span>
+
           <button
             className="ghost"
             disabled={page <= 1}
@@ -186,10 +252,12 @@ export default function AdminData() {
           >
             Previous
           </button>
+
           <span>
             Page {page} of{' '}
             {Math.max(1, Math.ceil((users?.total || 0) / pageSize))}
           </span>
+
           <button
             className="ghost"
             disabled={page * pageSize >= (users?.total || 0)}
@@ -202,6 +270,9 @@ export default function AdminData() {
 
       <section className="card pad">
         <h3>Authentication activity</h3>
+
+        {panelError('activity')}
+
         <Table
           headers={[
             'Event',
@@ -212,7 +283,11 @@ export default function AdminData() {
             'Status',
           ]}
           empty={
-            loading ? 'Loading events…' : 'No authentication events recorded.'
+            errors.activity
+              ? 'Authentication activity could not be loaded.'
+              : loading
+                ? 'Loading events…'
+                : 'No authentication events recorded.'
           }
           rows={(activity || []).map((event) => (
             <tr key={event.id}>
@@ -229,6 +304,9 @@ export default function AdminData() {
 
       <section className="card pad">
         <h3>Sessions</h3>
+
+        {panelError('sessions')}
+
         <Table
           headers={[
             'Session ID',
@@ -239,7 +317,13 @@ export default function AdminData() {
             'Expires',
             'Status',
           ]}
-          empty={loading ? 'Loading sessions…' : 'No sessions recorded.'}
+          empty={
+            errors.sessions
+              ? 'Session data could not be loaded.'
+              : loading
+                ? 'Loading sessions…'
+                : 'No sessions recorded.'
+          }
           rows={(sessions || []).map((session) => (
             <tr key={session.session_id}>
               <td>{session.session_id}</td>
@@ -259,6 +343,7 @@ export default function AdminData() {
       <section className="card pad">
         <div className="admin-section-head">
           <h3>Query analytics</h3>
+
           <div className="admin-filters">
             <label>
               From{' '}
@@ -269,6 +354,7 @@ export default function AdminData() {
                 onChange={(event) => setStart(event.target.value)}
               />
             </label>
+
             <label>
               To{' '}
               <input
@@ -281,12 +367,17 @@ export default function AdminData() {
             </label>
           </div>
         </div>
+
+        {panelError('analytics')}
+
         <p>
           <b>{analytics?.totalQueries ?? 0}</b> queries in selected range
         </p>
+
         {analytics?.source && (
           <p className="muted small">Source: {analytics.source}</p>
         )}
+
         <Trend data={analytics?.daily || []} />
       </section>
     </section>
