@@ -64,10 +64,12 @@ class RetrievalSettings:
     normalize_embeddings: bool = True
     query_prefix: str = ""
 
-    # Lexical search: "memory" (built at startup from the store's chunks; no extra
-    # service), "postgres" (index in a separate AlloyDB database, built by
-    # bm25_builder/) or "none" (vector search only).
+    # Lexical search: "native" (pg_textsearch bm25 index on chunks.content in the
+    # source database; needs vector_store=pgvector), "memory" (built at startup from
+    # the store's chunks; no extra service), "postgres" (index in a separate AlloyDB
+    # database, built by bm25_builder/) or "none" (vector search only).
     bm25_backend: str = "memory"
+    bm25_index_name: str = "idx_chunks_bm25"  # "native" only
     bm25_db: DatabaseConfig = field(default_factory=DatabaseConfig)
     bm25_schema: str = "bm25"
     bm25_postings_per_term: int = 2000
@@ -130,6 +132,7 @@ class RetrievalSettings:
             # Not stripped: e5/bge prefixes end with a meaningful space or colon.
             query_prefix=os.getenv("RETRIEVAL_QUERY_PREFIX", defaults.query_prefix),
             bm25_backend=_env_str("RETRIEVAL_BM25_BACKEND", defaults.bm25_backend),
+            bm25_index_name=_env_str("RETRIEVAL_BM25_INDEX_NAME", defaults.bm25_index_name),
             bm25_db=DatabaseConfig.from_environment("BM25_"),
             bm25_schema=_env_str("RETRIEVAL_BM25_SCHEMA", defaults.bm25_schema),
             bm25_postings_per_term=_env_int(
