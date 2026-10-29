@@ -52,12 +52,12 @@ class VertexEmbedder:
     def __init__(
         self,
         dimension: int = 768,
-        batch_size: int = 64,
+        batch_size: int = 32,
         allow_mock: Optional[bool] = None,
         max_retries: int = 3
     ):
         self.dimension = dimension
-        self.batch_size = batch_size
+        self.batch_size = min(batch_size, int(os.getenv('BATCH_SIZE', '32')))
         self.max_retries = max_retries
         self.allow_mock = allow_mock if allow_mock is not None else getattr(config, "allow_mock_embeddings", False)
         self.client = None
@@ -110,8 +110,21 @@ class VertexEmbedder:
 
         if self.client is not None:
             embeddings: List[List[float]] = []
-            for i in range(0, len(texts), self.batch_size):
-                batch = texts[i:i + self.batch_size]
+            batches = []
+            curr_batch = []
+            curr_tokens = 0
+            for t in texts:
+                est_tokens = max(len(t) // 3, 1)
+                if curr_batch and (len(curr_batch) >= self.batch_size or curr_tokens + est_tokens > 15000):
+                    batches.append(curr_batch)
+                    curr_batch = []
+                    curr_tokens = 0
+                curr_batch.append(t)
+                curr_tokens += est_tokens
+            if curr_batch:
+                batches.append(curr_batch)
+
+            for batch in batches:
                 res = None
                 for attempt in range(1, self.max_retries + 1):
                     try:
