@@ -45,7 +45,7 @@ class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
             """
             WITH ranked AS (
                 SELECT c.chunk_uuid AS chunk_id,
-                       c.content <@> :question AS bm25_score
+                       c.content <@> to_bm25query(:question, 'idx_chunks_bm25') AS bm25_score
                 FROM chunks AS c
                 JOIN judgments AS j ON j.judgment_uuid = c.judgment_uuid
                 JOIN source_files AS sf ON sf.source_file_uuid = c.source_file_uuid
@@ -58,7 +58,7 @@ class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
                   AND (:date_to IS NULL OR j.judgment_date <= :date_to)
                   AND (cardinality(CAST(:document_ids AS uuid[])) = 0
                        OR j.judgment_uuid = ANY(CAST(:document_ids AS uuid[])))
-                ORDER BY c.content <@> :question ASC, c.chunk_uuid
+                ORDER BY c.content <@> to_bm25query(:question, 'idx_chunks_bm25') ASC
                 LIMIT :candidate_limit
             )
             SELECT c.chunk_uuid::text AS chunk_id,

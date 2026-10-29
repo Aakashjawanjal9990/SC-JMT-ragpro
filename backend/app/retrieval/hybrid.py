@@ -17,6 +17,7 @@ from typing import Any, Protocol
 import numpy as np
 
 from app.retrieval.bm25_memory import InMemoryBM25
+from app.retrieval.bm25_native import NativeBM25
 from app.retrieval.bm25_pg import PostgresBM25Index
 from app.retrieval.config import RetrievalSettings
 from app.retrieval.db import Database
@@ -180,7 +181,13 @@ class HybridRetriever:
             )
 
         bm25: BM25Searcher | None = None
-        if settings.bm25_backend == "postgres":
+        if settings.bm25_backend == "native":
+            if settings.vector_store != "pgvector":
+                raise ValueError(
+                    "RETRIEVAL_BM25_BACKEND=native needs RETRIEVAL_VECTOR_STORE=pgvector"
+                )
+            bm25 = NativeBM25(source_db, settings.bm25_index_name)
+        elif settings.bm25_backend == "postgres":
             bm25_db = Database(settings.bm25_db, "BM25 database")
             databases.append(bm25_db)
             bm25 = PostgresBM25Index(bm25_db, settings.bm25_schema, settings.bm25_postings_per_term)
@@ -220,7 +227,12 @@ class HybridRetriever:
             max_per_doc=settings.max_per_doc,
             pseudo_query=pseudo_query,
             pseudo_weight=settings.pseudo_query_weight,
-            prf_docs=settings.prf_feedback_docs if settings.prf_enabled else 0,
+            # The native index takes no per-term weights, so PRF cannot be applied.
+            prf_docs=(
+                settings.prf_feedback_docs
+                if settings.prf_enabled and settings.bm25_backend != "native"
+                else 0
+            ),
             prf_terms_count=settings.prf_expansion_terms,
             prf_weight=settings.prf_expansion_weight,
             doc_decay=settings.doc_decay,
@@ -295,7 +307,8 @@ class HybridRetriever:
         start = time.perf_counter()
         terms = sorted(set(tokenize(query)))
         weights = {term: 1.0 for term in terms}
-        hits = self.bm25.search_weighted(weights, k, filters)
+        # search() gets the raw query: the native index applies its own tokenizer.
+        hits = self.bm25.search(query, k, filters)
         timings = {"bm25": _ms(start)}
         if not self.prf_docs or not hits:
             return hits, timings
