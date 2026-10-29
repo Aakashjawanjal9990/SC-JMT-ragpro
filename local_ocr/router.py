@@ -1,13 +1,12 @@
 """
-Conditional Local OCR & Structure Routing Evaluator
+Conditional Google Cloud Vision OCR Routing Evaluator
 Evaluates native PyMuPDF text and coordinate layout signals to route pages to:
 - SKIP_NATIVE_OK: High-quality native text and reliable layout (no OCR needed).
 - SKIP_BLANK: Genuinely blank page (no text, no images, no drawings).
-- USE_PADDLE_OCR: Scanned image-only page, or corrupted/unprintable encoding.
-- USE_PP_STRUCTURE: Complex layout, table detection, or disordered multi-column reading order.
-- FLAG_FOR_REVIEW: Borderline quality requiring human inspection.
+- USE_GOOGLE_OCR: Scanned image-only page, degraded print, or corrupted encoding.
+- FLAG_FOR_REVIEW: Borderline quality requiring inspection.
 
-Guarantees that character count alone never triggers local OCR.
+Guarantees that character count alone never triggers unnecessary OCR.
 """
 
 import hashlib
@@ -26,8 +25,10 @@ from parsing.zone_extractor import CoordinateZoneExtractor
 class PageRoutingDecision(str, Enum):
     SKIP_NATIVE_OK = "skip_native_ok"             # Readable native text & reliable layout
     SKIP_BLANK = "skip_blank"                     # Genuinely blank page
-    USE_PADDLE_OCR = "use_paddle_ocr"             # Image-only scan or corrupted encoding
-    USE_PP_STRUCTURE = "use_pp_structure"         # Complex layout, tables, multi-column order
+    USE_GOOGLE_OCR = "use_google_ocr"             # Image-only scan, degraded print, or corrupted encoding (Google Vision OCR)
+    USE_OCR = "use_google_ocr"                    # Standard alias
+    USE_PADDLE_OCR = "use_google_ocr"             # Backwards compatibility alias
+    USE_PP_STRUCTURE = "use_google_ocr"           # Layout recovery handled by Google Vision hierarchy
     FLAG_FOR_REVIEW = "flag_for_review"           # Borderline / uncertain signals
 
 
@@ -90,7 +91,7 @@ class DocumentEvaluation:
 
 
 class LocalOCRRouter:
-    """Evaluates page quality and routes pages conditionally to native, PaddleOCR, or PP-Structure."""
+    """Evaluates page quality and routes pages conditionally to native digital extraction or Google Cloud Vision OCR."""
 
     def __init__(self, config: Optional[LocalOCRConfig] = None):
         self.config = config or ocr_config
@@ -216,7 +217,7 @@ class LocalOCRRouter:
         # RULE 2: Empty Native Text with Visible Content (Scanned Page)
         # -------------------------------------------------------------
         elif total_clean_chars < self.config.min_text_length and (image_count > 0 or drawing_count > 8):
-            decision = PageRoutingDecision.USE_PADDLE_OCR
+            decision = PageRoutingDecision.USE_GOOGLE_OCR
             reasons.append(f"empty_or_sparse_text_with_visible_scanned_content (images={image_count}, drawings={drawing_count})")
 
         # -------------------------------------------------------------
@@ -230,29 +231,29 @@ class LocalOCRRouter:
         # RULE 4: Corrupted Text / Excessive Replacement Characters
         # -------------------------------------------------------------
         elif replacement_ratio >= self.config.replacement_char_ratio_max:
-            decision = PageRoutingDecision.USE_PADDLE_OCR
+            decision = PageRoutingDecision.USE_GOOGLE_OCR
             reasons.append(f"excessive_replacement_chars (ratio={replacement_ratio:.3f} >= threshold={self.config.replacement_char_ratio_max:.3f})")
 
         # -------------------------------------------------------------
         # RULE 5: Severe OCR Degradation
         # -------------------------------------------------------------
         elif ocr_q < self.config.ocr_quality_floor and total_clean_chars >= self.config.min_text_length:
-            decision = PageRoutingDecision.USE_PADDLE_OCR
+            decision = PageRoutingDecision.USE_GOOGLE_OCR
             reasons.append(f"severe_ocr_degradation (score={ocr_q:.3f} < floor={self.config.ocr_quality_floor:.3f})")
 
         # -------------------------------------------------------------
-        # RULE 6: Complex Layout or Tables requiring PP-Structure
+        # RULE 6: Complex Layout or Tables requiring Structure Recovery
         # -------------------------------------------------------------
-        elif has_complex_layout and self.config.enable_pp_structure:
-            decision = PageRoutingDecision.USE_PP_STRUCTURE
-            reasons.append("complex_layout_or_table_detected_requires_pp_structure")
+        elif has_complex_layout:
+            decision = PageRoutingDecision.USE_GOOGLE_OCR
+            reasons.append("complex_layout_or_table_detected_requires_google_vision_ocr")
 
         # -------------------------------------------------------------
-        # RULE 7: Borderline / Confused Quality -> Trigger Local PaddleOCR
+        # RULE 7: Borderline / Confused Quality -> Trigger Google Cloud Vision OCR
         # -------------------------------------------------------------
         elif self.config.ocr_quality_floor <= ocr_q < self.config.ocr_quality_borderline:
-            decision = PageRoutingDecision.USE_PADDLE_OCR
-            reasons.append(f"borderline_or_confused_ocr_quality_triggering_paddle_ocr (score={ocr_q:.3f} in [{self.config.ocr_quality_floor:.2f}, {self.config.ocr_quality_borderline:.2f}))")
+            decision = PageRoutingDecision.USE_GOOGLE_OCR
+            reasons.append(f"borderline_or_confused_ocr_quality_triggering_google_ocr (score={ocr_q:.3f} in [{self.config.ocr_quality_floor:.2f}, {self.config.ocr_quality_borderline:.2f}))")
 
         # -------------------------------------------------------------
         # RULE 8: Readable Native Text & Reliable Layout
@@ -293,8 +294,7 @@ class LocalOCRRouter:
             summary: Dict[str, int] = {
                 PageRoutingDecision.SKIP_NATIVE_OK.value: 0,
                 PageRoutingDecision.SKIP_BLANK.value: 0,
-                PageRoutingDecision.USE_PADDLE_OCR.value: 0,
-                PageRoutingDecision.USE_PP_STRUCTURE.value: 0,
+                PageRoutingDecision.USE_GOOGLE_OCR.value: 0,
                 PageRoutingDecision.FLAG_FOR_REVIEW.value: 0
             }
 
@@ -302,12 +302,11 @@ class LocalOCRRouter:
                 page = doc[pno - 1]
                 ev = self.evaluate_page(page, pno, total_pages, doc_id)
                 page_evals.append(ev)
-                summary[ev.decision.value] += 1
+                dec_val = ev.decision.value if isinstance(ev.decision, PageRoutingDecision) else str(ev.decision)
+                summary[dec_val] = summary.get(dec_val, 0) + 1
 
-                if ev.decision == PageRoutingDecision.USE_PADDLE_OCR:
+                if ev.decision in (PageRoutingDecision.USE_GOOGLE_OCR, PageRoutingDecision.USE_PADDLE_OCR):
                     ocr_candidates.append(pno)
-                elif ev.decision == PageRoutingDecision.USE_PP_STRUCTURE:
-                    structure_candidates.append(pno)
                 elif ev.decision in (PageRoutingDecision.SKIP_NATIVE_OK, PageRoutingDecision.SKIP_BLANK):
                     skipped.append(pno)
                 elif ev.decision == PageRoutingDecision.FLAG_FOR_REVIEW:

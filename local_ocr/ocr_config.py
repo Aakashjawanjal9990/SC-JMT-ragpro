@@ -1,7 +1,6 @@
 """
-Configuration for Local Conditional PaddleOCR & PP-StructureV3 Pipeline
-Centralizes local cache paths, routing thresholds, CPU/GPU settings, and output directories.
-Does not perform large model downloads on import.
+Configuration for Google Cloud Vision OCR Pipeline (PCE v2.0)
+Centralizes Google Vision API settings, routing thresholds, rendering DPI, and fallback modes.
 """
 
 import os
@@ -13,13 +12,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 @dataclass
-class LocalOCRConfig:
-    # Local Inference & Cache Paths
-    cache_dir: Path = REPO_ROOT / "output" / "paddlex_cache"
-    use_gpu: bool = False
-    lang: str = "en"
-    ocr_version: str = "PP-OCRv4"
-    enable_pp_structure: bool = True
+class GoogleVisionOCRConfig:
+    # Google Cloud Vision Settings
+    ocr_engine: str = "google_vision"
+    feature_type: str = "DOCUMENT_TEXT_DETECTION"
+    render_dpi: int = 200
+    timeout_seconds: int = 20
 
     # Routing Evaluation Thresholds
     min_text_length: int = 30                    # Minimum character count to consider non-empty
@@ -39,29 +37,18 @@ class LocalOCRConfig:
 
     # Paths & Output Directories
     base_dir: Path = REPO_ROOT
-    output_dir: Path = REPO_ROOT / "output" / "local_ocr"
-    raw_dir: Path = REPO_ROOT / "output" / "local_ocr" / "raw"
-    parsed_dir: Path = REPO_ROOT / "output" / "local_ocr" / "parsed"
-    reports_dir: Path = REPO_ROOT / "output" / "local_ocr" / "reports"
-    fixtures_dir: Path = REPO_ROOT / "tests" / "fixtures"
-    sample_pdfs_dir: Path = REPO_ROOT / "data" / "sample_pdfs"
+    output_dir: Path = REPO_ROOT / "output" / "ocr"
+    raw_dir: Path = REPO_ROOT / "output" / "ocr" / "raw"
+    parsed_dir: Path = REPO_ROOT / "output" / "ocr" / "parsed"
+    reports_dir: Path = REPO_ROOT / "output" / "ocr" / "reports"
 
     def __post_init__(self):
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         self.parsed_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
-        # Apply environment settings for PaddlePaddle & PaddleX inside sandbox
-        os.environ["PADDLE_PDX_CACHE_HOME"] = str(self.cache_dir)
-        os.environ["PADDLE_HOME"] = str(self.cache_dir)
-        os.environ["MPLCONFIGDIR"] = str(self.cache_dir / "matplotlib")
-        os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
-        os.environ["FLAGS_enable_pir_api"] = "0"
-        os.environ["FLAGS_use_onednn"] = "0"
-        os.environ["FLAGS_onednn_verbose"] = "0"
 
-
-ocr_config = LocalOCRConfig()
-
+# Aliases for backwards compatibility
+LocalOCRConfig = GoogleVisionOCRConfig
+ocr_config = GoogleVisionOCRConfig()

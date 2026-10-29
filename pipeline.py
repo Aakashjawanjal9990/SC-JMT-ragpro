@@ -69,7 +69,7 @@ class IngestionPipeline:
         """
         Processes a single judgment PDF end-to-end through PCE v2.0:
         1. Parsing & Coordinate Zoning (PyMuPDF)
-        2. 8-Rule Conditional OCR Routing & Local PaddleOCR layout extraction
+        2. 8-Rule Conditional OCR Routing & Google Cloud Vision OCR layout extraction
         3. Rule R2 Single-Page Paragraph-Preserving Chunking (page_start == page_end)
         4. Contextual 768-dim Vector Embedding (Vertex AI text-embedding-004)
         5. Persistence to AlloyDB (PostgreSQL 17.10) / SQLite and structured JSON deliverables.
@@ -157,39 +157,24 @@ class IngestionPipeline:
                     document_id=doc_id
                 )
 
-                if routing_res.decision == PageRoutingDecision.USE_PP_STRUCTURE:
-                    try:
-                        struct_res = self.engine.structure_page(page_obj, page_number=pno, allow_mock=config.allow_mock_embeddings)
-                        raw_text = (struct_res.markdown_text or "").strip() if struct_res else ""
-                        if raw_text:
-                            cleaned = purge_ocr_running_headers(raw_text, is_first_page=(pno == 1))
-                            pz.cleaned_text = CoordinateZoneExtractor.heal_ocr_degradations(cleaned)
-                            pz.extraction_method = "pp_structure"
-                            pz.ocr_quality = 0.90
-                        elif struct_res and struct_res.error:
-                            logger.warning(f"PP-Structure warning on {doc_id} p.{pno}: {struct_res.error}")
-                            pz.extraction_method = "ocr_failed"
-                            pz.ocr_quality = 0.0
-                    except Exception as e:
-                        logger.error(f"PP-Structure invocation failure on {doc_id} p.{pno}: {e}")
-                        pz.extraction_method = "ocr_failed"
-                        pz.ocr_quality = 0.0
-
-                elif routing_res.decision in (PageRoutingDecision.USE_PADDLE_OCR, PageRoutingDecision.FLAG_FOR_REVIEW):
+                if routing_res.decision in (
+                    PageRoutingDecision.USE_GOOGLE_OCR,
+                    PageRoutingDecision.FLAG_FOR_REVIEW
+                ):
                     try:
                         ocr_res = self.engine.ocr_page(page_obj, page_number=pno, allow_mock=config.allow_mock_embeddings)
                         raw_text = (ocr_res.text or "").strip() if ocr_res else ""
                         if raw_text:
                             cleaned = purge_ocr_running_headers(raw_text, is_first_page=(pno == 1))
                             pz.cleaned_text = CoordinateZoneExtractor.heal_ocr_degradations(cleaned)
-                            pz.extraction_method = "paddle_ocr"
-                            pz.ocr_quality = max(0.70, getattr(ocr_res, "average_confidence", 0.85))
+                            pz.extraction_method = "google_vision_ocr"
+                            pz.ocr_quality = max(0.70, getattr(ocr_res, "average_confidence", 0.95))
                         elif ocr_res and ocr_res.error:
-                            logger.warning(f"OCR execution warning on {doc_id} p.{pno}: {ocr_res.error}")
+                            logger.warning(f"Google Vision OCR warning on {doc_id} p.{pno}: {ocr_res.error}")
                             pz.extraction_method = "ocr_failed"
                             pz.ocr_quality = 0.0
                     except Exception as e:
-                        logger.error(f"OCR invocation failure on {doc_id} p.{pno}: {e}")
+                        logger.error(f"Google Vision OCR invocation failure on {doc_id} p.{pno}: {e}")
                         pz.extraction_method = "ocr_failed"
                         pz.ocr_quality = 0.0
 
@@ -207,15 +192,15 @@ class IngestionPipeline:
                 if not pz.cleaned_text.strip():
                     images = page_obj.get_images() if hasattr(page_obj, "get_images") else []
                     raw_chars = len((page_obj.get_text("text") or "").strip())
-                    if images and pz.extraction_method not in ("ocr_failed", "paddle_ocr", "pp_structure"):
+                    if images and pz.extraction_method not in ("ocr_failed", "google_vision_ocr", "google_vision_structure"):
                         try:
                             ocr_res = self.engine.ocr_page(page_obj, page_number=pno, allow_mock=config.allow_mock_embeddings)
                             raw_text = (ocr_res.text or "").strip() if ocr_res else ""
                             if raw_text:
                                 cleaned = purge_ocr_running_headers(raw_text, is_first_page=(pno == 1))
                                 pz.cleaned_text = CoordinateZoneExtractor.heal_ocr_degradations(cleaned)
-                                pz.extraction_method = "paddle_ocr"
-                                pz.ocr_quality = max(0.70, getattr(ocr_res, "average_confidence", 0.85))
+                                pz.extraction_method = "google_vision_ocr"
+                                pz.ocr_quality = max(0.70, getattr(ocr_res, "average_confidence", 0.95))
                             else:
                                 pz.extraction_method = "ocr_failed"
                                 pz.ocr_quality = 0.0
@@ -316,7 +301,22 @@ class IngestionPipeline:
             tracker.complete_stage("vector_db")
             # Finalize Tracker & Save Logs
             avg_q = sum(p.ocr_quality for p in pages_data) / max(1, len(pages_data))
-            tracker.finalize(total_pages=total_pages, total_chunks=len(all_chunks), ocr_quality=avg_q)
+
+            ocr_failed_pages = [p.page_number for p in pages_data if p.extraction_method == "ocr_failed"]
+            if ocr_failed_pages:
+                ocr_err_msg = f"Unrecoverable OCR failure on {len(ocr_failed_pages)} page(s): {ocr_failed_pages}"
+                logger.error(f"Document {doc_id}: {ocr_err_msg}")
+                tracker.finalize(
+                    total_pages=total_pages,
+                    total_chunks=len(all_chunks),
+                    ocr_quality=avg_q,
+                    error=ocr_err_msg
+                )
+                if os.getenv("STRICT_OCR_GATE", "true").lower() in ("true", "1", "yes"):
+                    raise RuntimeError(f"Strict OCR Failure Gate: {ocr_err_msg} in {doc_id}")
+            else:
+                tracker.finalize(total_pages=total_pages, total_chunks=len(all_chunks), ocr_quality=avg_q)
+
             try:
                 export_verification_csv(config.logss_dir / "pipeline_verification_master.csv")
             except Exception as e:

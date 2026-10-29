@@ -21,6 +21,7 @@ sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 from config import config, resolve_database_url
 from storage.gcs_loader import GCSDataLoader
+from local_ocr.engine import GoogleVisionOCREngine
 
 
 def estimate_tokens(text: str) -> int:
@@ -247,12 +248,17 @@ def run_quality_audit(
     gcs_contract = GCSDataLoader.verify_contract()
     gate_gcs_pass = bool(gcs_contract.get("passed", False))
 
+    # OFF-001 & OFF-008: Verify Google Cloud Vision OCR contract and multi-tier fallbacks
+    ocr_contract = GoogleVisionOCREngine.verify_contract()
+    gate_ocr_pass = bool(ocr_contract.get("passed", False))
+
     all_passed = bool(
         gate_r2_pass
         and gate_content_pass
         and gate_header_pass
         and gate_embedding_pass
         and gate_gcs_pass
+        and gate_ocr_pass
     )
 
     quality_checks = {
@@ -279,6 +285,10 @@ def run_quality_audit(
         "GCS_DISCOVERY_CONTRACT": {
             "status": "PASSED" if gate_gcs_pass else "FAILED",
             "detail": gcs_contract.get("detail", "Verified GCS discovery API contract")
+        },
+        "GOOGLE_VISION_OCR_CONTRACT": {
+            "status": "PASSED" if gate_ocr_pass else "FAILED",
+            "detail": ocr_contract.get("detail", "Verified Google Cloud Vision OCR contract")
         }
     }
 

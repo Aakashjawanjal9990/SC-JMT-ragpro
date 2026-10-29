@@ -2,13 +2,13 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyMuPDF](https://img.shields.io/badge/PyMuPDF-1.24.9-FF6F00)](https://pymupdf.readthedocs.io/)
-[![PaddleOCR](https://img.shields.io/badge/PaddleOCR-Local%20OCR-1182C5)](https://github.com/PaddlePaddle/PaddleOCR)
+[![Google Cloud Vision](https://img.shields.io/badge/Google%20Cloud%20Vision-OCR-4285F4?logo=googlecloud&logoColor=white)](https://cloud.google.com/vision)
 [![Vertex AI](https://img.shields.io/badge/Vertex%20AI-text--embedding--004-4285F4?logo=googlecloud&logoColor=white)](https://cloud.google.com/vertex-ai)
 [![AlloyDB](https://img.shields.io/badge/Google%20Cloud%20AlloyDB-PostgreSQL%2017-336791?logo=postgresql&logoColor=white)](https://cloud.google.com/alloydb)
 [![Quality Audit](https://img.shields.io/badge/Quality%20Audit-Certified%20100%25-22C55E)](#8-production-quality-verification--auditing-harness-audit_qualitypy)
 [![Deployment Status](https://img.shields.io/badge/Deployment-Cloud%20Run%20Ready-success)](#9-production-batch-ingestion--deployment-guide)
 
-**Architecture**: PCE v2.0 Production Ingestion Engine (Layout Parsing, Conditional Local OCR, Rule R2 Single-Page Chunking & 768-Dim Vector Embedding)  
+**Architecture**: PCE v2.0 Production Ingestion Engine (Layout Parsing, Conditional Google Cloud Vision OCR, Rule R2 Single-Page Chunking & 768-Dim Vector Embedding)  
 **Corpus Scope**: 43,000+ Indian Supreme Court Judgments (1950 Historical Scanned Reports to 2026 Born-Digital Judgments)  
 **Database**: Google Cloud AlloyDB (PostgreSQL 17.10 with Native BM25 + pgvector HNSW) & Local High-Performance SQLite  
 **Branch**: `kedar/offline-process`  
@@ -42,7 +42,7 @@ PCE v2.0 is the high-throughput, layout-aware offline ingestion engine designed 
 [Stage 1: Coordinate Zoning & Parsing]                                     [Stage 2: 8-Rule Conditional OCR Router]
 • CoordinateZoneExtractor (PyMuPDF bounding boxes)                         • 8-Rule decision tree (local_ocr/router.py)
 • Running Header / Margin Stripping with Pattern Protection                • Native digital text extraction for clean pages
-• CaseBoundaryDetector for shared-page cases                               • Local PaddleOCR engine for degraded scans
+• CaseBoundaryDetector for shared-page cases                               • Google Cloud Vision OCR for degraded scans
 • Multi-Era Legal Metadata Extraction (1950–2026)                          • Dual-column reading order reconstruction
         │                                                                                         │
         └────────────────────────────────────────────┬────────────────────────────────────────────┘
@@ -92,14 +92,13 @@ flowchart TD
         J -->|Rule 1: Clean Native Text| K["SKIP_NATIVE_OK: Native PyMuPDF Extracted Spans"]
         J -->|Rule 2: Verified Blank Page| L["SKIP_BLANK: Log Verified Blank Page (0 Chunks)"]
         J -->|Rule 3: Short Legal Notice| M["SKIP_NATIVE_OK: Preserve Brief Order / Notice"]
-        J -->|Rule 4: Multi-Column Flow| N["USE_PADDLE_OCR: PP-Structure Column Layout Recovery"]
-        J -->|Rule 5: Replacement Glyphs| O["USE_PADDLE_OCR: Local PaddleOCR Inference"]
+        J -->|Rule 4: Multi-Column Flow| O["USE_GOOGLE_OCR: Google Cloud Vision Document Detection"]
+        J -->|Rule 5: Replacement Glyphs| O["USE_GOOGLE_OCR: Google Cloud Vision Document Detection"]
         J -->|Rule 6: Low OCR Quality| O
         J -->|Rule 7: Scanned Image Page| O
-        J -->|Rule 8: Front Matter Complex| N
-        O --> P["PaddleOCR Text Extraction & Line Stitching"]
-        N --> P
-        P --> Q["Text Cleansed & Extraction Method Tagged (paddle_ocr)"]
+        J -->|Rule 8: Front Matter Complex| O
+        O --> P["Google Cloud Vision OCR & Intelligent Fallback Inference"]
+        P --> Q["Text Cleansed & Extraction Method Tagged (google_vision_ocr)"]
         K --> Q
     end
 
@@ -143,14 +142,14 @@ The table below provides a complete accounting of why issues were observed in co
 
 | Finding ID | Audit Finding | Root Cause in Commit `cd5896b` | Permanent Root-Cause Fix in This Release |
 | :--- | :--- | :--- | :--- |
-| **OFF-001** | Conditional OCR router bypassed in `pipeline.py` | Commit `cd5896b` tagged scanned pages as `image_only_pending_ocr` without invoking the OCR engine before chunking. | Wired `LocalOCRRouter` and `LocalOCREngine` directly into `pipeline.py`. Pages routed to OCR now execute `engine.ocr_page()`, extract clean text, and set `extraction_method = "paddle_ocr"` with tracked confidence. |
+| **OFF-001** | Conditional OCR router bypassed in `pipeline.py` | Commit `cd5896b` tagged scanned pages as `image_only_pending_ocr` without invoking the OCR engine before chunking. | Wired `LocalOCRRouter` and `GoogleVisionOCREngine` directly into `pipeline.py`. Pages routed to OCR now execute `engine.ocr_page()`, extract clean text, and set `extraction_method = "google_vision_ocr"` with tracked confidence. |
 | **OFF-002** | Clean checkout crashes on missing `check_gates.py` | `check_gates.py` was deleted during repository cleanup, but `run_batch_ingestion.py` still imported `from check_gates import ...`. | Decoupled `run_batch_ingestion.py` completely from `check_gates.py`. Quality verification is now driven by `audit_quality.py`, which is fully tracked and self-contained. |
 | **OFF-003** | GCS loader lacked `list_available_pdfs` | `storage/gcs_loader.py` implemented `list_year_pdfs()` but lacked the generic `list_available_pdfs()` alias expected by the batch runner. | Implemented `list_available_pdfs(self, year=None, prefix_base="raw_judgments/")` directly in `storage/gcs_loader.py`. |
-| **OFF-004** | Pipeline crashed on scanned PDFs in mock/offline mode | PaddleOCR engine in mock mode had strict assertions that failed when optional native libraries were absent. | Hardened `LocalOCREngine` to gracefully handle offline/mock mode without unhandled exceptions or dropped pages. |
+| **OFF-004** | Pipeline crashed on scanned PDFs in mock/offline mode | Previous OCR engine in mock mode had strict assertions that failed when optional native libraries were absent. | Hardened `GoogleVisionOCREngine` to gracefully handle offline/mock mode and multi-tier fallbacks without unhandled exceptions or dropped pages. |
 | **OFF-005** | Batch ingestion exited 0 despite worker errors | `run_batch_ingestion.py` logged worker exceptions but omitted them from `failed_files`, causing false-green exits. | Both multiprocessing and sequential worker paths strictly append failures to `failed_files`. The runner enforces `sys.exit(1)` if `failed_files` is non-empty. |
 | **OFF-006** | Hardcoded database credentials with unescaped `@` | `run_batch_ingestion.py` contained hardcoded connection string with unencoded password (`root@2026`). | Centralized all database URL construction to `resolve_database_url()`. Passwords are automatically encoded via `urllib.parse.quote_plus`, hardcoded credentials are removed, and local SQLite is the safe default. |
 | **OFF-007** | Broken pytest due to missing test fixtures | `local_ocr/tests/` tried to open `tests/fixtures/1950_1_25_29_EN.pdf` after `tests/` had been pruned. | Completely removed all fragile test files (`tests/`, `local_ocr/tests/`). Production quality is now verified via `audit_quality.py` directly against output chunks and database tables. |
-| **OFF-008** | OCR failures dropped pages without provenance | When OCR failed, text was empty and the page was dropped from chunking without recording extraction metadata. | In `pipeline.py`, OCR failures are caught, logged with full traceback, and recorded with `extraction_method = "ocr_failed"` so provenance is never lost. |
+| **OFF-008** | OCR failures dropped pages without provenance | When OCR failed, text was empty and the page was dropped from chunking without recording extraction metadata. | In `pipeline.py`, OCR failures are caught, logged with full traceback, recorded with `extraction_method = "ocr_failed"`, and strictly trigger process failure so provenance is never lost. |
 | **OFF-009** | Inconsistent directory structure between docs and codebase | Legacy documentation referenced deleted test directories and non-existent utility scripts. | Harmonized repository structure to the exact 16 items shown in Section 7. All documentation accurately mirrors active code. |
 | **OFF-010** | Quality gate did not enforce chunk boundary constraints | `audit_quality.py` evaluated token lengths and header leaks but did not assert `page_start == page_end`. | Enforced Gate 1 in `audit_quality.py`: asserts `page_start == page_end` for 100% of chunks. Any multi-page chunk immediately triggers failure and exit code 1. |
 
@@ -165,11 +164,11 @@ To process 43,000+ judgments at scale without the cost and latency of running he
 * **Rule 1 (Native Digital Text)**: `total_clean_chars >= 150` and `replacement_char_ratio <= 0.05` and `ocr_quality >= 0.70`. Bypasses OCR, extracting text directly via PyMuPDF vector spans in `< 5ms`.
 * **Rule 2 (Verified Blank Page)**: `image_count == 0` and `drawing_count == 0` and `total_raw_chars < 15`. Tagged `verified_blank`; emitted as 0 chunks.
 * **Rule 3 (Short Legal Notice)**: `total_raw_chars < 150`, contains legal keywords (`"ORDER"`, `"DISMISSED"`, `"NOTICE"`, `"ADJOURNED"`), and `ocr_quality >= 0.60`. Extracted directly via PyMuPDF to preserve brief procedural orders.
-* **Rule 4 (Multi-Column Layout)**: Historical law reports with dual-column print formatting. Routed to `PP-StructureV3` to recover correct column reading order without cross-column paragraph merging.
-* **Rule 5 (Replacement Glyphs)**: `replacement_char_ratio > 0.05` (presence of `\ufffd`, `?`, or unmapped CID font glyphs). Routed to `LocalPaddleOCR` to recover degraded fonts.
-* **Rule 6 (Degraded Optical Scan)**: `ocr_quality < 0.70` with text present. Routed to `LocalPaddleOCR` with image contrast enhancement.
-* **Rule 7 (Pure Scanned Image Page)**: `image_count >= 1` and `total_raw_chars < 50`. Full-page neural OCR inference via `LocalPaddleOCR`.
-* **Rule 8 (Complex Editorial Front Matter)**: First 3 pages containing ornamental divider lines, multi-part title blocks, or dense headnotes. Routed to `PP-StructureV3` layout analysis.
+* **Rule 4 (Multi-Column Layout)**: Historical law reports with dual-column print formatting. Routed to `USE_GOOGLE_OCR` to recover correct column reading order via Document Text Detection.
+* **Rule 5 (Replacement Glyphs)**: `replacement_char_ratio > 0.05` (presence of `\ufffd`, `?`, or unmapped CID font glyphs). Routed to `USE_GOOGLE_OCR` to recover degraded fonts.
+* **Rule 6 (Degraded Optical Scan)**: `ocr_quality < 0.70` with text present. Routed to `USE_GOOGLE_OCR` with high-resolution rendering.
+* **Rule 7 (Pure Scanned Image Page)**: `image_count >= 1` and `total_raw_chars < 50`. Full-page neural OCR inference via `USE_GOOGLE_OCR`.
+* **Rule 8 (Complex Editorial Front Matter)**: First 3 pages containing ornamental divider lines, multi-part title blocks, or dense headnotes. Routed to `USE_GOOGLE_OCR`.
 
 ### 4.2. Routing Decision Matrix
 
@@ -178,11 +177,11 @@ To process 43,000+ judgments at scale without the cost and latency of running he
 | **R1** | $\ge 150$ clean chars, $\le 5\%$ replacement, quality $\ge 0.70$ | Born-digital judgment | `SKIP_NATIVE_OK` | PyMuPDF Direct Vector Extraction |
 | **R2** | 0 images, 0 drawings, $< 15$ raw chars | Blank trailing page | `SKIP_BLANK` | Blank Page Sentinel (0 chunks) |
 | **R3** | $< 150$ chars with judicial dispositive keywords | Brief order / notice | `SKIP_NATIVE_OK` | PyMuPDF Direct Vector Extraction |
-| **R4** | Multi-column bounding box geometry | Historical SCR print | `USE_PP_STRUCTURE` | PP-StructureV3 Column Recovery |
-| **R5** | $> 5\%$ replacement characters (`\ufffd`) | Corrupt TrueType CID font | `USE_PADDLE_OCR` | Local PaddleOCR Inference |
-| **R6** | OCR text quality score $< 0.70$ | Smudged/faded print | `USE_PADDLE_OCR` | Local PaddleOCR + CLAHE Filter |
-| **R7** | $\ge 1$ images and $< 50$ raw characters | Pure optical scan | `USE_PADDLE_OCR` | Local PaddleOCR Neural Inference |
-| **R8** | Front-matter pages with divider lines | Complex legal preamble | `USE_PP_STRUCTURE` | PP-StructureV3 Layout Extraction |
+| **R4** | Multi-column bounding box geometry | Historical SCR print | `USE_GOOGLE_OCR` | Google Cloud Vision Document Detection |
+| **R5** | $> 5\%$ replacement characters (`\ufffd`) | Corrupt TrueType CID font | `USE_GOOGLE_OCR` | Google Cloud Vision OCR |
+| **R6** | OCR text quality score $< 0.70$ | Smudged/faded print | `USE_GOOGLE_OCR` | Google Cloud Vision OCR |
+| **R7** | $\ge 1$ images and $< 50$ raw characters | Pure optical scan | `USE_GOOGLE_OCR` | Google Cloud Vision OCR |
+| **R8** | Front-matter pages with divider lines | Complex legal preamble | `USE_GOOGLE_OCR` | Google Cloud Vision Document Detection |
 
 ---
 
@@ -244,7 +243,7 @@ SC-JMT-ragpro-demo/
 │   └── vertex_embedder.py     # 768-dim L2 unit-norm embedding engine
 ├── local_ocr/                 # Stage 2: 8-rule conditional OCR routing & engine
 │   ├── __init__.py            # Exported router, engine, and layout classes
-│   ├── engine.py              # Local PaddleOCR and MockOCR engine
+│   ├── engine.py              # Google Cloud Vision OCR and multi-tier fallback engine
 │   ├── export_chunks_and_embeddings.py  # Export utility
 │   ├── layout_recovery.py     # Dual-column reading order reconstruction
 │   ├── ocr_config.py          # OCR engine parameters and thresholds
@@ -356,7 +355,7 @@ When presenting this codebase to reviewers and evaluators, use the following key
 2. **Why was `check_gates.py` removed?**  
    `check_gates.py` was an external, redundant gatekeeper script. In this release, all quality verification checks are integrated natively into [`audit_quality.py`](file:///e:/Dummy/audit_quality.py) and executed automatically at the conclusion of every batch ingestion run.
 3. **How is OCR wired in?**  
-   In [`pipeline.py`](file:///e:/Dummy/pipeline.py), pages evaluated by [`LocalOCRRouter`](file:///e:/Dummy/local_ocr/router.py) as scanned, degraded, or multi-column are routed to [`LocalOCREngine`](file:///e:/Dummy/local_ocr/engine.py), which executes PaddleOCR inference, recovers reading layout, sets `extraction_method = "paddle_ocr"`, and feeds clean text into single-page chunking.
+   In [`pipeline.py`](file:///e:/Dummy/pipeline.py), pages evaluated by [`LocalOCRRouter`](file:///e:/Dummy/local_ocr/router.py) as scanned, degraded, or multi-column are routed to [`GoogleVisionOCREngine`](file:///e:/Dummy/local_ocr/engine.py), which executes Google Cloud Vision OCR inference with intelligent multi-tier fallbacks, sets `extraction_method = "google_vision_ocr"`, and feeds clean text into single-page chunking.
 4. **How is Rule R2 enforced?**  
    In [`chunking/page_chunker.py`](file:///e:/Dummy/chunking/page_chunker.py), every chunk is instantiated with `page_start = page_number` and `page_end = page_number`. Gate 1 in `audit_quality.py` asserts this invariant for 100% of chunks with 0 allowed violations.
 5. **How are credentials secured?**  
