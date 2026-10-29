@@ -134,7 +134,7 @@ class GoogleVisionOCREngine:
         if allow_mock or os.getenv("ALLOW_MOCK_EMBEDDINGS", "").lower() in ("true", "1", "yes"):
             if os.getenv("ENVIRONMENT", "development").strip().lower() in {"production", "prod"}:
                 raise RuntimeError("Mock OCR is prohibited in production.")
-            if not self.client and not os.getenv("GOOGLE_API_KEY"):
+            if allow_mock or (not self.client and not os.getenv("GOOGLE_API_KEY")):
                 mock_text = (
                     "SUPREME COURT OF INDIA\n"
                     "Petitioner v. State of Madras\n"
@@ -319,14 +319,6 @@ class GoogleVisionOCREngine:
         engine = cls()
         has_ocr = hasattr(engine, "ocr_page")
         has_structure = hasattr(engine, "structure_page")
-
-        # Test mock execution path
-        mock_res = engine.ocr_page(page_or_image=b"", page_number=1, allow_mock=True)
-        valid_mock = bool(mock_res and mock_res.text and len(mock_res.lines) > 0 and mock_res.average_confidence > 0.90)
-
-        passed = bool(has_ocr and has_structure and valid_mock)
-        detail = "Verified Google Cloud Vision OCR contract, multi-tier fallbacks, and confidence scoring" if passed else "OCR contract validation failed"
-        return {"passed": passed, "detail": detail}
 
         # Test mock execution path
         mock_res = engine.ocr_page(page_or_image=b"", page_number=1, allow_mock=True)
