@@ -41,7 +41,7 @@ The default backend path performs AlloyDB native BM25 retrieval from `chunks.con
 
 ## Deployment configuration
 
-Production requires `DATABASE_URL` pointing to AlloyDB, `REDIS_URL`, `AUTH_CHALLENGE_SECRET` (at least 32 bytes), `GROQ_API_KEY`, SMTP host/from address, and HTTPS `CORS_ORIGINS`. Supply passwords, the Groq key, and the challenge secret through Secret Manager. Configure Cloud Run networking to reach AlloyDB securely. Configure CORS to the exact frontend origin; credentialed CORS is enabled, so wildcard origins are not allowed. The Cloud Build deployment uses `SameSite=None` for separate frontend/API sites and `Secure`; if hosting changes to a same-site origin, review this setting. Local HTTP development uses `SameSite=Lax`.
+Production requires `DATABASE_URL` pointing to AlloyDB, `REDIS_URL`, `AUTH_CHALLENGE_SECRET` (at least 32 bytes), `GROQ_API_KEY`, SMTP host/from address, and HTTPS `CORS_ORIGINS`. Supply passwords, the Groq key, and the challenge secret through Secret Manager. Configure Cloud Run networking to reach AlloyDB securely. The API Cloud Run service is private; the public BFF invokes it through a dedicated service account. Configure the frontend host to proxy same-origin `/api` requests to the BFF and set production `VITE_API_URL` to `https://YOUR_FRONTEND_ORIGIN/api`. Configure CORS to the exact frontend origin without `/api`; credentialed CORS is enabled, so wildcard origins are not allowed. The Cloud Build deployment uses `SameSite=None` and `Secure`; local HTTP development uses `SameSite=Lax`.
 
 ## Known integration blockers
 

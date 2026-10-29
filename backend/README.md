@@ -8,6 +8,7 @@ FastAPI backend for the Supreme Court RAG project. It keeps the versioned `/v1/q
 - `app/api/compat.py`: frontend-compatible auth, chat, conversation, and admin endpoints
 - `app/auth_service.py`: Argon2id passwords, email codes, hashed opaque sessions, and auth activity logging
 - `app/email.py`: SMTP verification and reset messages
+- `bff/`: public browser-facing proxy that invokes the private API with Cloud Run IAM
 - `app/adapters/`: PostgreSQL BM25 retrieval and Groq answer generation
 - `app/orchestrator.py`: query flow and citation identity checks
 - `migrations/versions/0001_live_schema_baseline.py`: baseline migration
@@ -36,7 +37,7 @@ The supplied AlloyDB schema dump includes the live judgment, source, page, authe
 
 Production requires `DATABASE_URL` pointing to AlloyDB with `postgresql+asyncpg`, `REDIS_URL`, `AUTH_CHALLENGE_SECRET` (at least 32 bytes), `GROQ_API_KEY`, SMTP host/from address, and exact HTTPS `CORS_ORIGINS`. Store database, Redis, Groq, SMTP credentials, and challenge secret in Secret Manager. Configure Cloud Run networking so it can securely reach AlloyDB and Redis, and use a least-privilege runtime service account. The local Compose PostgreSQL image does not include AlloyDB's `pg_textsearch`; use the AlloyDB URL for BM25 query testing.
 
-Cloud Run provides HTTPS and manages its serving certificate. The container itself listens on HTTP behind the managed proxy. The Cloud Build pipeline runs Ruff, Bandit, and pip-audit, builds/pushes the image, and deploys the service. Database migrations remain excluded until the existing database has been stamped at the verified baseline.
+Cloud Run provides HTTPS and manages its serving certificate. The API listens on HTTP behind the managed proxy and is deployed with public invocation disabled. The separate BFF is the browser-facing service; it is publicly invokable and calls the API with a dedicated service account that alone receives `roles/run.invoker`. The frontend host must route same-origin `/api` requests to the BFF. The Cloud Build pipeline runs Ruff, Bandit, and pip-audit, validates required production settings, then builds, pushes, and deploys the API. Database migrations remain excluded until the existing database has been stamped at the verified baseline.
 
 ## API and ownership
 

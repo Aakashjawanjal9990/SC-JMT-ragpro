@@ -6,6 +6,27 @@ steps:
       - -ceu
       - pip install -e '.[dev]' && ruff check app migrations && bandit -r app -ll && pip-audit
 
+  - id: validate-production-settings
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        require_value() {
+          local name="$1" value="$2"
+          if [[ -z "$value" || "$value" == *replace-with* ]]; then
+            echo "Set $name to its project-specific value before deploying" >&2
+            exit 1
+          fi
+        }
+
+        require_value _RUNTIME_SERVICE_ACCOUNT "${_RUNTIME_SERVICE_ACCOUNT}"
+        require_value _VPC_CONNECTOR "${_VPC_CONNECTOR}"
+        require_value _CORS_ORIGINS "${_CORS_ORIGINS}"
+        require_value _SMTP_HOST "${_SMTP_HOST}"
+        require_value _SMTP_FROM_EMAIL "${_SMTP_FROM_EMAIL}"
+        case "${_CORS_ORIGINS}" in https://*) ;; *) echo "_CORS_ORIGINS must use HTTPS" >&2; exit 1 ;; esac
+
   - id: build-container
     name: gcr.io/cloud-builders/docker
     args:
@@ -16,7 +37,9 @@ steps:
 
   - id: push-container
     name: gcr.io/cloud-builders/docker
-    args: [push, ${_IMAGE}]
+    args:
+      - push
+      - ${_IMAGE}
 
   - id: deploy-api
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
@@ -28,7 +51,7 @@ steps:
       - --image=${_IMAGE}
       - --region=${_REGION}
       - --platform=managed
-      - --allow-unauthenticated
+      - --no-allow-unauthenticated
       - --service-account=${_RUNTIME_SERVICE_ACCOUNT}
       - --vpc-connector=${_VPC_CONNECTOR}
       - --vpc-egress=private-ranges-only
