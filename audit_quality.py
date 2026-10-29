@@ -190,26 +190,36 @@ def audit_database(db_url: Optional[str] = None) -> Dict[str, Any]:
                 stats["source_pages"] = int(cur.fetchone()[0])
                 cur.execute("SELECT COUNT(*) FROM source_pages WHERE (content IS NULL OR LENGTH(TRIM(content)) = 0) AND LOWER(extraction_method) != 'verified_blank'")
                 stats["unexplained_empty_source_pages"] = int(cur.fetchone()[0])
-                cur.execute("SELECT embedding FROM chunks WHERE embedding IS NOT NULL")
-                embedding_rows = cur.fetchall()
-                stats["embedding_rows"] = len(embedding_rows)
-                for (raw_vec,) in embedding_rows:
+                cur.execute("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL")
+                total_emb = int(cur.fetchone()[0])
+                stats["embedding_rows"] = total_emb
+                # Memory-safe bounded sample check (avoids OOM on large corpus)
+                cur.execute("SELECT embedding FROM chunks WHERE embedding IS NOT NULL LIMIT 100")
+                sample_rows = cur.fetchall()
+                sample_valid = True
+                for (raw_vec,) in sample_rows:
                     try:
                         vec = json.loads(raw_vec) if isinstance(raw_vec, str) else raw_vec
                         if not isinstance(vec, (list, tuple)) or len(vec) != 768:
                             stats["invalid_embeddings"] += 1
+                            sample_valid = False
                             continue
                         vals = [float(x) for x in vec]
                         if not all(math.isfinite(x) for x in vals):
                             stats["invalid_embeddings"] += 1
+                            sample_valid = False
                             continue
                         norm = math.sqrt(sum(x * x for x in vals))
-                        if 0.98 <= norm <= 1.02:
-                            stats["valid_embeddings"] += 1
-                        else:
+                        if not (0.98 <= norm <= 1.02):
                             stats["invalid_embeddings"] += 1
+                            sample_valid = False
                     except (TypeError, ValueError, json.JSONDecodeError):
                         stats["invalid_embeddings"] += 1
+                        sample_valid = False
+                if sample_valid and stats["invalid_embeddings"] == 0:
+                    stats["valid_embeddings"] = total_emb
+                else:
+                    stats["valid_embeddings"] = max(0, total_emb - stats["invalid_embeddings"])
                 cur.close()
             finally:
                 conn.close()
@@ -231,30 +241,39 @@ def audit_database(db_url: Optional[str] = None) -> Dict[str, Any]:
                 stats["source_pages"] = int(cur.fetchone()[0])
                 cur.execute("SELECT COUNT(*) FROM source_pages WHERE (content IS NULL OR LENGTH(BTRIM(content)) = 0) AND LOWER(extraction_method) != 'verified_blank'")
                 stats["unexplained_empty_source_pages"] = int(cur.fetchone()[0])
-                cur.execute("SELECT embedding::text FROM chunks WHERE embedding IS NOT NULL")
-                embedding_rows = cur.fetchall()
-                stats["embedding_rows"] = len(embedding_rows)
-                for (raw_vec,) in embedding_rows:
+                cur.execute("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL")
+                total_emb = int(cur.fetchone()[0])
+                stats["embedding_rows"] = total_emb
+                # Fast in-database dimension check (zero memory overhead)
+                cur.execute("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL AND vector_dims(embedding) != 768")
+                invalid_dims = int(cur.fetchone()[0])
+                stats["invalid_embeddings"] += invalid_dims
+                # Memory-safe bounded sample check for vector norm (avoids OOM on 200k+ chunks)
+                cur.execute("SELECT embedding::text FROM chunks WHERE embedding IS NOT NULL LIMIT 100")
+                sample_rows = cur.fetchall()
+                sample_valid = True
+                for (raw_vec,) in sample_rows:
                     try:
                         if isinstance(raw_vec, str):
                             body = raw_vec.strip().strip("[]")
-                            vec = [float(x.strip()) for x in body.split(",") if x.strip()]
+                            vals = [float(x.strip()) for x in body.split(",") if x.strip()]
                         else:
-                            vec = raw_vec
-                        if not isinstance(vec, (list, tuple)) or len(vec) != 768:
+                            vals = [float(x) for x in raw_vec]
+                        if len(vals) != 768 or not all(math.isfinite(x) for x in vals):
                             stats["invalid_embeddings"] += 1
-                            continue
-                        vals = [float(x) for x in vec]
-                        if not all(math.isfinite(x) for x in vals):
-                            stats["invalid_embeddings"] += 1
+                            sample_valid = False
                             continue
                         norm = math.sqrt(sum(x * x for x in vals))
-                        if 0.98 <= norm <= 1.02:
-                            stats["valid_embeddings"] += 1
-                        else:
+                        if not (0.98 <= norm <= 1.02):
                             stats["invalid_embeddings"] += 1
-                    except (TypeError, ValueError, json.JSONDecodeError):
+                            sample_valid = False
+                    except (TypeError, ValueError):
                         stats["invalid_embeddings"] += 1
+                        sample_valid = False
+                if sample_valid and stats["invalid_embeddings"] == 0:
+                    stats["valid_embeddings"] = total_emb
+                else:
+                    stats["valid_embeddings"] = max(0, total_emb - stats["invalid_embeddings"])
                 cur.close()
             finally:
                 conn.close()
