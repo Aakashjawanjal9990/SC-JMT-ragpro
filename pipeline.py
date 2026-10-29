@@ -34,7 +34,8 @@ from storage.stage_tracker import DocumentStageTracker, export_verification_csv,
 from storage.gcs_loader import GCSDataLoader
 from local_ocr.router import LocalOCRRouter, PageRoutingDecision
 from local_ocr.engine import LocalOCREngine
-from local_ocr.layout_recovery import purge_ocr_running_headers
+from local_ocr.layout_recovery import purge_ocr_running_headers
+
 
 
 def _sha256_file(path: str, chunk_size: int = 1024 * 1024) -> str:
@@ -144,7 +145,12 @@ class IngestionPipeline:
             tracker.start_stage("provenance")
             source_file_size = os.path.getsize(active_path)
             source_sha256 = _sha256_file(active_path)
-            doc = fitz.open(active_path)
+            if source_file_size == 0:
+                raise ValueError(f"Corrupt source PDF: 0 bytes in storage for {pdf_path}")
+            try:
+                doc = fitz.open(active_path)
+            except Exception as e:
+                raise ValueError(f"Corrupted or unreadable PDF binary ({type(e).__name__}) for {pdf_path}: {e}") from e
             total_pages = len(doc)
             if total_pages == 0:
                 raise ValueError(f"PDF contains no pages: {active_path}")
