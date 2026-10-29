@@ -12,7 +12,6 @@ This library contains all **engineering specifications, architectural walkthroug
 
 | Document | Purpose & Scope |
 | :--- | :--- |
-| **[`HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md`](./HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md)** | **🔥 Lead Retrieval Engineer Handover (Pratik)**: Definitive retrieval engineering specification covering chunk token bounds ($1,500$ char target, $\le 2,000$ char hard max), Rule R2 single-page guarantee, 768-dim $L_2$-normalized Vertex AI embeddings, AlloyDB HNSW / BM25 index definitions, `chunks.metadata` JSONB schema, and ready-to-run hybrid search SQL templates. |
 | **[`PRODUCTION_DEPLOYMENT_CERTIFICATION.md`](./PRODUCTION_DEPLOYMENT_CERTIFICATION.md)** | **Master Production Sign-Off**: Lead engineer accountability certification, root-cause resolution of Verity QA audit findings (OFF-001 to OFF-010), Cloud Run readiness, and deployment defense guide. |
 | **[`REVIEWER_WALKTHROUGH_PCE_V2.md`](./REVIEWER_WALKTHROUGH_PCE_V2.md)** | **Reviewer Walkthrough & Defense**: Line-by-line guide for evaluators demonstrating zero-DDL compliance, single-page chunking (Rule R2), and fail-closed quality gates. |
 | **[`TEAM_HANDOFF_MASTER_INDEX.md`](./TEAM_HANDOFF_MASTER_INDEX.md)** | **Team Handoff & Operations**: Master operational checklist, CLI cheat sheet, environment variables reference, and failure recovery protocols. |
@@ -50,7 +49,6 @@ This library contains all **engineering specifications, architectural walkthroug
 
 | Document | Purpose & Scope |
 | :--- | :--- |
-| **[`HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md`](./HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md)** | **Google Cloud Vision OCR Specification**: Section 7 details the 4-tier fallback hierarchy (Google Cloud Vision gRPC $\to$ REST $\to$ PyMuPDF stream rescue $\to$ Tesseract), header purging, and OCR degradation healing. |
 | **[`Local_Conditional_PaddleOCR_Completion_Report.md`](./Local_Conditional_PaddleOCR_Completion_Report.md)** | **Historical OCR Phase 1 Report**: Prior local OCR evaluation report detailing router design patterns and initial 8-rule routing logic. |
 | **[`Local_OCR_20_PDFs_E2E_Pipeline_Test_Report.md`](./Local_OCR_20_PDFs_E2E_Pipeline_Test_Report.md)** | **20-PDF OCR Pipeline Validation**: Full empirical test results processing 20 historical scanned PDFs and modern born-digital judgments. |
 | **[`LlamaParse_Conditional_OCR_PoC_Report.md`](./LlamaParse_Conditional_OCR_PoC_Report.md)** | **Cloud vs Local OCR Comparison**: Comparative PoC evaluating cloud-based parsers against local/cloud vision engines on cost, latency, and privacy. |

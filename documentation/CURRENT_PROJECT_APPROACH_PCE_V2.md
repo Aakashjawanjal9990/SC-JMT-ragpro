@@ -41,7 +41,6 @@
   - **Min Alpha Chars**: `15` alphabetic characters (eliminates stray noise).
   - **Max Overlap**: `300` characters (sliding overlap between sub-paragraphs on the same page).
 - Generated 768-dimensional L2-normalized unit vectors ($||\vec{v}||_2 = 1.0$) using Vertex AI `text-embedding-004`.
-- Handover specification for search and retrieval engineers available at [`HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md`](./HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md).
 
 ---
 
@@ -71,5 +70,4 @@ SC-JMT-ragpro-demo/
 ├── run_batch_ingestion.py         # Multi-process parallel batch ingestion entry point
 └── documentation/
     ├── INDEX.md                   # Master index of all 28 documentation files
-    └── HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md  # Handover report for Pratik (Retrieval Engineer)
 ```

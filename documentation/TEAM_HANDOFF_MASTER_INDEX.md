@@ -12,11 +12,10 @@ Below is the directory of tailored handoff documents created for each team membe
 
 | Teammate | Role | What They Depend On Kedar For | Dedicated Handoff File |
 | :--- | :--- | :--- | :--- |
-| **Pratik** | Retrieval & Search Engineer | $\le 500$ token chunk size guarantees, deterministic chunk IDs, 768-dim $L_2$-normalized dense vectors, HNSW index parameters, `chunks.metadata` schema, and hybrid search SQL queries. | [**`HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md`**](./HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md) |
+| **Pratik** | Retrieval & Search Engineer | $\le 500$ token chunk size guarantees, deterministic chunk IDs, 768-dim $L_2$-normalized dense vectors, HNSW index parameters, `chunks.metadata` schema, and hybrid search SQL queries. | [**`PARSING_CHUNKING_EMBEDDING_APPROACH.md`**](./PARSING_CHUNKING_EMBEDDING_APPROACH.md) |
 | **Anuradha** | Database Architect | 9-table schema DDL, `VECTOR(768)` pgvector integration, HNSW index parameters, and batch loader throughput. | [**`PRODUCTION_DEPLOYMENT_CERTIFICATION.md`**](./PRODUCTION_DEPLOYMENT_CERTIFICATION.md) |
 | **Prathmesh** | Cloud Infrastructure | Cloud Run Jobs sizing (77 parallel tasks, 4 vCPU, 8 GB RAM), IAM roles, Docker container, and Secret Manager. | [**`PRODUCTION_DEPLOYMENT_CERTIFICATION.md`**](./PRODUCTION_DEPLOYMENT_CERTIFICATION.md) |
 | **Nilesh** | RAG Integrator | Strict page-boundary isolation, legal citation format, section heading context (`FACTS`, `JUDGMENT`), and Pydantic models. | [**`PARSING_CHUNKING_EMBEDDING_APPROACH.md`**](./PARSING_CHUNKING_EMBEDDING_APPROACH.md) |
-| **Tanvi** | Frontend & UI | Clickable PDF citation locators (`document_id`, `page_start`), case metadata summary cards, and deep-link URLs. | [**`HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md`**](./HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md#8-pdf-deep-linking--provenance-locator) |
 | **Kusuma** | QA & Testing | Automated test suite (`audit_quality.py`), error reporting format, edge case matrix, and synthetic PDF generator. | [**`PCE_V2_TEST_EXECUTION_AND_VERIFICATION_REPORT.md`**](./PCE_V2_TEST_EXECUTION_AND_VERIFICATION_REPORT.md) |
 | **Aakash** | CI/CD & Delivery | GitHub Actions workflow, Python 3.11 container specifications, Cloud Build triggers, and rollout commands. | [**`PRODUCTION_DEPLOYMENT_CERTIFICATION.md`**](./PRODUCTION_DEPLOYMENT_CERTIFICATION.md) |
 
@@ -24,7 +23,6 @@ Below is the directory of tailored handoff documents created for each team membe
 
 ## 2. Key Architecture Artifacts
 
-- **🔥 Lead Retrieval Engineer Handover (Pratik)**: [`HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md`](./HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md)
 - **Master Documentation Library Index**: [`INDEX.md`](./INDEX.md)
 - **Master Production Sign-Off & Verification**: [`PRODUCTION_DEPLOYMENT_CERTIFICATION.md`](./PRODUCTION_DEPLOYMENT_CERTIFICATION.md)
 - **Full Architecture Deep Dive**: [`MASTER_V1_TO_V2_FULL_ARCHITECTURE_AND_CODE_WALKTHROUGH.md`](./MASTER_V1_TO_V2_FULL_ARCHITECTURE_AND_CODE_WALKTHROUGH.md)

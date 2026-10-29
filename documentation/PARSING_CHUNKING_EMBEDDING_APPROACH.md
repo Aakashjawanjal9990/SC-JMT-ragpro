@@ -116,7 +116,6 @@ Chunks never cross physical page boundaries, ensuring pinpoint legal citations.
 - **Min Chunk Size**: `150` characters ($\approx 30 - 38$ tokens, filters noise fragments).
 - **Min Alphabetic Content**: `15` alphabetic characters (`[a-zA-Z]`, rejects stray page numbers and isolated punctuation).
 - **Max Overlap**: `300` characters ($\approx 60 - 75$ tokens, applied only between paragraph sub-blocks on the same page).
-- **Full Handover Spec**: See [**`HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md`**](./HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md) for complete query templates, schema dictionaries, and HNSW index parameters.
 
 ### 4.2. Short Canonical Prefix & Vertex AI Embeddings (Rule R3)
 Contextual embedding text is prefixed with a concise ($\le 12$ words) canonical anchor:

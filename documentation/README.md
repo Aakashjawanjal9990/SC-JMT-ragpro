@@ -8,7 +8,6 @@ This directory consolidates all engineering specifications, architecture bluepri
 
 | Document | Purpose & Target Audience |
 | :--- | :--- |
-| **[`HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md`](./HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md)** | **🔥 Lead Retrieval Engineer Handover (Pratik)**: Detailed token bounds ($1,500$ char target, $\le 2,000$ char max), Rule R2 single-page guarantees, 768-dim $L_2$-normalized Vertex AI embeddings, AlloyDB HNSW / BM25 index definitions, `chunks.metadata` schema, and hybrid search SQL queries. |
 | **[`INDEX.md`](./INDEX.md)** | **Master Library Index**: Complete categorized catalog of all 28 technical specifications, architecture blueprints, and evaluation reports. |
 | **[`TEAM_HANDOFF_MASTER_INDEX.md`](./TEAM_HANDOFF_MASTER_INDEX.md)** | **Team Handoff Matrix**: Multi-discipline handoff pointers for Database, Retrieval, DevOps, QA, and CI/CD engineers. |
 | **[`PRODUCTION_DEPLOYMENT_CERTIFICATION.md`](./PRODUCTION_DEPLOYMENT_CERTIFICATION.md)** | **Production Certification**: Lead engineer verification and resolution of all QA audit findings (OFF-001 through OFF-010). |
