@@ -131,6 +131,8 @@ def main():
     parser.add_argument("--task-index", type=int, default=None, help="Cloud Run Task Index (0 to task-count - 1)")
     parser.add_argument("--task-count", type=int, default=None, help="Total number of Cloud Run Tasks for parallel sharding")
     parser.add_argument("--target", choices=["local", "alloydb"], default=os.getenv("DATABASE_TARGET", "local"), help="Target database: 'local' (SQLite) or 'alloydb' (Google Cloud AlloyDB PostgreSQL 17)")
+    parser.add_argument("--skip-existing", dest="skip_existing", action="store_true", default=True, help="Skip documents already present in the database (default: True)")
+    parser.add_argument("--force-reingest", dest="skip_existing", action="store_false", help="Force re-processing of documents even if already present in the database")
     parser.add_argument("--reset", action="store_true", help="Wipe database and output JSONs before ingestion (local dev only)")
     parser.add_argument("--yes", "-y", action="store_true", help="Acknowledge and confirm destructive operations without interactive prompt")
     args = parser.parse_args()
@@ -247,6 +249,23 @@ def main():
 
     target_files = list(unique_targets.values())
 
+    # Check for already-ingested judgments in database to prevent duplicate ingestion
+    existing_ids = set()
+    if args.skip_existing and pipeline.loader and pipeline.loader.engine:
+        try:
+            from sqlalchemy import text
+            with pipeline.loader.engine.connect() as conn:
+                existing_rows = conn.execute(text("SELECT judgment_id FROM judgments")).fetchall()
+                existing_ids = {r[0] for r in existing_rows}
+            if existing_ids:
+                already_ingested = [f for f in target_files if _document_id_for(f[0]) in existing_ids]
+                if already_ingested:
+                    print(f">> [Skip Existing] Detected {len(already_ingested):,} PDF(s) already persisted in database. Skipping duplicate processing.")
+                    target_files = [f for f in target_files if _document_id_for(f[0]) not in existing_ids]
+                    print(f">> Retained {len(target_files):,} uningested judgment PDFs for processing.")
+        except Exception as e:
+            logger.info(f"Database existing record check bypassed: {e}")
+
     # Cloud Run Jobs Task Array sharding (CLOUD_RUN_TASK_INDEX / CLOUD_RUN_TASK_COUNT)
     task_index_env = os.getenv("CLOUD_RUN_TASK_INDEX")
     task_count_env = os.getenv("CLOUD_RUN_TASK_COUNT")
@@ -263,6 +282,9 @@ def main():
     print(f"\n>> Queued {total_count} judgment PDFs for parallel batch ingestion (Workers: {args.workers})...\n")
 
     if total_count == 0:
+        if existing_ids:
+            print(">> All assigned PDFs have already been successfully ingested into the database. Exiting clean.")
+            sys.exit(0)
         print("[ERROR] No PDFs found to process. This is not a successful ingestion run.")
         sys.exit(2)
 
