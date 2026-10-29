@@ -221,19 +221,31 @@ def main():
         for f in data_pdfs[:args.limit or len(data_pdfs)]:
             target_files.append((str(f), args.year))
 
-    # Document IDs derive from the filename stem; two inputs sharing a stem would
-    # overwrite each other in the database, so fail before any work is done.
-    first_seen = {}
-    collisions = []
-    for fpath, _yr in target_files:
+    # Deduplicate target_files by document ID (filename stem).
+    # When scanning multi-year buckets, identical judgment PDFs may exist in multiple partition folders.
+    # We resolve duplicates deterministically:
+    # 1. Prefer path whose 'year=YYYY' folder matches the document ID's year prefix.
+    # 2. Otherwise retain the first seen path.
+    unique_targets = {}
+    duplicate_count = 0
+    for fpath, yr in target_files:
         doc_id = _document_id_for(fpath)
-        if doc_id in first_seen and first_seen[doc_id] != fpath:
-            collisions.append(f"{doc_id}: {first_seen[doc_id]} vs {fpath}")
-        first_seen.setdefault(doc_id, fpath)
-    if collisions:
-        raise RuntimeError(
-            "Duplicate document IDs would overwrite each other: " + "; ".join(collisions[:10])
-        )
+        if doc_id not in unique_targets:
+            unique_targets[doc_id] = (fpath, yr)
+        else:
+            duplicate_count += 1
+            existing_fpath, existing_yr = unique_targets[doc_id]
+            parts = doc_id.split("_")
+            if parts and parts[0].isdigit():
+                prefix_year = parts[0]
+                if f"year={prefix_year}" in fpath and f"year={prefix_year}" not in existing_fpath:
+                    unique_targets[doc_id] = (fpath, yr)
+
+    if duplicate_count > 0:
+        print(f">> [Deduplication] Resolved {duplicate_count:,} duplicate PDF path(s) across bucket partitions.")
+        print(f">> Retained {len(unique_targets):,} unique judgment documents for processing.")
+
+    target_files = list(unique_targets.values())
 
     # Cloud Run Jobs Task Array sharding (CLOUD_RUN_TASK_INDEX / CLOUD_RUN_TASK_COUNT)
     task_index_env = os.getenv("CLOUD_RUN_TASK_INDEX")
