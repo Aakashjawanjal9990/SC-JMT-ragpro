@@ -5,14 +5,14 @@
 [![Google Cloud Vision](https://img.shields.io/badge/Google%20Cloud%20Vision-OCR-4285F4?logo=googlecloud&logoColor=white)](https://cloud.google.com/vision)
 [![Vertex AI](https://img.shields.io/badge/Vertex%20AI-text--embedding--004-4285F4?logo=googlecloud&logoColor=white)](https://cloud.google.com/vertex-ai)
 [![AlloyDB](https://img.shields.io/badge/Google%20Cloud%20AlloyDB-PostgreSQL%2017-336791?logo=postgresql&logoColor=white)](https://cloud.google.com/alloydb)
-[![Quality Audit](https://img.shields.io/badge/Quality%20Audit-Certified%20100%25-22C55E)](#8-production-quality-verification--auditing-harness-audit_qualitypy)
+[![Quality Audit](https://img.shields.io/badge/Quality%20Audit-Run%20Required-orange)](#8-production-quality-verification--auditing-harness-audit_qualitypy)
 [![Deployment Status](https://img.shields.io/badge/Deployment-Cloud%20Run%20Ready-success)](#9-production-batch-ingestion--deployment-guide)
 
 **Architecture**: PCE v2.0 Production Ingestion Engine (Layout Parsing, Conditional Google Cloud Vision OCR, Rule R2 Single-Page Chunking & 768-Dim Vector Embedding)  
 **Corpus Scope**: 43,000+ Indian Supreme Court Judgments (1950 Historical Scanned Reports to 2026 Born-Digital Judgments)  
 **Database**: Google Cloud AlloyDB (PostgreSQL 17.10 with Native BM25 + pgvector HNSW) & Local High-Performance SQLite  
 **Branch**: `kedar/offline-process`  
-**Status**: **Production Ready & Certified for Full-Scale Deployment**
+**Status**: **Not certified for unrestricted production ingestion — validation required**
 
 ---
 
@@ -23,7 +23,7 @@
 > **Engineer**: Kedar Limbalkar  
 > **Target Scope**: Offline Ingestion Pipeline — PDF Layout Extraction, Coordinate Zoning, Conditional OCR Routing, Rule R2 Single-Page Chunking, and 768-Dim Vertex AI Embedding.  
 > 
-> *“I hereby certify that the offline ingestion, parsing, OCR routing, single-page chunking, and embedding codebase has been audited, decoupled, and hardened for production deployment across the entire 43,000+ Supreme Court corpus. All defects identified in the earlier QA audit of commit `cd5896b` have been eradicated at their root cause. If any pipeline failure, text drop, unhandled exception, or chunk boundary violation occurs during parsing or chunking on this corpus, I assume full engineering accountability.”*
+> **Release status: NOT CERTIFIED.** The code and tests must be validated on the exact release commit, including OCR integration, batch failure accounting, database persistence, and corpus reconciliation. A successful local audit is not proof of full-corpus production readiness.
 
 ---
 
@@ -109,7 +109,7 @@ flowchart TD
         T --> U{"Chunk Size Evaluator"}
         U -->|Length > 2000 chars| V["Sub-split on sentence boundaries with 1-sentence overlap"]
         U -->|Length < 150 chars| W["Merge with adjacent paragraph on same physical page"]
-        U -->|150 <= Length <= 2000| X["Emit Certified Single-Page Chunk"]
+        U -->|150 <= Length <= 2000| X["Emit Single-Page Chunk (requires validation)"]
         V --> X
         W --> X
         X --> Y["Strict Mathematical Invariant: page_start == page_end"]
@@ -138,7 +138,7 @@ flowchart TD
 
 ## 3. QA Audit (Commit `cd5896b`) Root-Cause Analysis & Eradication Ledger
 
-The table below provides a complete accounting of why issues were observed in commit `cd5896b` during the previous QA review, and how each finding was eradicated at source level in this release:
+The table below records the earlier audit findings and the remediation approaches described by this codebase. These are not proof of production readiness; verify each item with the tests and runtime evidence for the exact release commit:
 
 | Finding ID | Audit Finding | Root Cause in Commit `cd5896b` | Permanent Root-Cause Fix in This Release |
 | :--- | :--- | :--- | :--- |
@@ -147,7 +147,7 @@ The table below provides a complete accounting of why issues were observed in co
 | **OFF-003** | GCS loader lacked `list_available_pdfs` | `storage/gcs_loader.py` implemented `list_year_pdfs()` but lacked the generic `list_available_pdfs()` alias expected by the batch runner. | Implemented `list_available_pdfs(self, year=None, prefix_base="raw_judgments/")` directly in `storage/gcs_loader.py`. |
 | **OFF-004** | Pipeline crashed on scanned PDFs in mock/offline mode | Previous OCR engine in mock mode had strict assertions that failed when optional native libraries were absent. | Hardened `GoogleVisionOCREngine` to gracefully handle offline/mock mode and multi-tier fallbacks without unhandled exceptions or dropped pages. |
 | **OFF-005** | Batch ingestion exited 0 despite worker errors | `run_batch_ingestion.py` logged worker exceptions but omitted them from `failed_files`, causing false-green exits. | Both multiprocessing and sequential worker paths strictly append failures to `failed_files`. The runner enforces `sys.exit(1)` if `failed_files` is non-empty. |
-| **OFF-006** | Hardcoded database credentials with unescaped `@` | `run_batch_ingestion.py` contained hardcoded connection string with unencoded password (`root@2026`). | Centralized all database URL construction to `resolve_database_url()`. Passwords are automatically encoded via `urllib.parse.quote_plus`, hardcoded credentials are removed, and local SQLite is the safe default. |
+| **OFF-006** | Hardcoded database credentials with unescaped `@` | `run_batch_ingestion.py` previously contained a hard-coded connection string with a reserved character in the password. | Centralized all database URL construction to `resolve_database_url()`. Passwords are automatically encoded via `urllib.parse.quote_plus`, hardcoded credentials are removed, and local SQLite is the safe default. |
 | **OFF-007** | Broken pytest due to missing test fixtures | `local_ocr/tests/` tried to open `tests/fixtures/1950_1_25_29_EN.pdf` after `tests/` had been pruned. | Completely removed all fragile test files (`tests/`, `local_ocr/tests/`). Production quality is now verified via `audit_quality.py` directly against output chunks and database tables. |
 | **OFF-008** | OCR failures dropped pages without provenance | When OCR failed, text was empty and the page was dropped from chunking without recording extraction metadata. | In `pipeline.py`, OCR failures are caught, logged with full traceback, recorded with `extraction_method = "ocr_failed"`, and strictly trigger process failure so provenance is never lost. |
 | **OFF-009** | Inconsistent directory structure between docs and codebase | Legacy documentation referenced deleted test directories and non-existent utility scripts. | Harmonized repository structure to the exact 16 items shown in Section 7. All documentation accurately mirrors active code. |
@@ -224,7 +224,7 @@ $$\|v\|_2 = \sqrt{\sum_{i=1}^{768} v_i^2} = 1.0 \pm 0.02$$
 
 ## 7. Clean Repository Structure (16-Item Production Footprint)
 
-The repository layout strictly matches the certified 16-item production footprint:
+The repository layout is a working project structure; verify it against the exact release commit before deployment:
 
 ```
 SC-JMT-ragpro-demo/
@@ -265,7 +265,7 @@ SC-JMT-ragpro-demo/
 ├── audit_quality.py           # Standalone production quality auditor
 ├── config.py                  # Dynamic configuration loader & URL resolver
 ├── pipeline.py                # Main orchestrator (Parsing -> OCR -> Chunks -> Embed)
-├── README.md                  # Master architecture & deployment certification
+├── README.md                  # Architecture, validation, and operational guidance
 ├── requirements.txt           # Production Python dependencies
 └── run_batch_ingestion.py     # High-throughput parallel batch ingestion runner
 ```
@@ -274,7 +274,7 @@ SC-JMT-ragpro-demo/
 
 ## 8. Production Quality Verification & Auditing Harness (`audit_quality.py`)
 
-Rather than relying on brittle synthetic test fixtures, production quality is certified by [`audit_quality.py`](file:///e:/Dummy/audit_quality.py), which performs automated verification against generated chunk deliverables and database tables:
+The repository provides a data-driven auditor, but its result is not a production certification by itself. Run it together with reproducible integration tests using [`audit_quality.py`](audit_quality.py), which performs automated verification against generated chunk deliverables and database tables:
 
 ### Evaluated Invariants
 1. **Rule R2 Single-Page Invariant**: Asserts that `page_start == page_end` for 100% of chunks. Zero multi-page chunks permitted.
@@ -351,12 +351,12 @@ gcloud run jobs execute pce-batch-ingestion
 When presenting this codebase to reviewers and evaluators, use the following key architectural points:
 
 1. **Why were test directories (`tests/`) removed?**  
-   The previous test suite depended on synthetic local PDF files (`tests/fixtures/1950_1_25_29_EN.pdf`) that were not tracked in the public repository, causing clean checkouts to fail pytest. The pipeline now uses a self-contained, data-driven production auditor ([`audit_quality.py`](file:///e:/Dummy/audit_quality.py)) that validates real chunks and database rows against the mathematical invariants of the corpus.
+   The previous test suite depended on synthetic local PDF files (`tests/fixtures/1950_1_25_29_EN.pdf`) that were not tracked in the public repository, causing clean checkouts to fail pytest. The pipeline uses a data-driven auditor ([`audit_quality.py`](audit_quality.py)) that validates selected chunk and database invariants. It does not replace missing fixture tests or end-to-end OCR/persistence validation.
 2. **Why was `check_gates.py` removed?**  
-   `check_gates.py` was an external, redundant gatekeeper script. In this release, all quality verification checks are integrated natively into [`audit_quality.py`](file:///e:/Dummy/audit_quality.py) and executed automatically at the conclusion of every batch ingestion run.
+   `check_gates.py` was an external, redundant gatekeeper script. In this release, all quality verification checks are integrated natively into [`audit_quality.py`](audit_quality.py) and executed automatically at the conclusion of every batch ingestion run.
 3. **How is OCR wired in?**  
    In [`pipeline.py`](file:///e:/Dummy/pipeline.py), pages evaluated by [`LocalOCRRouter`](file:///e:/Dummy/local_ocr/router.py) as scanned, degraded, or multi-column are routed to [`GoogleVisionOCREngine`](file:///e:/Dummy/local_ocr/engine.py), which executes Google Cloud Vision OCR inference with intelligent multi-tier fallbacks, sets `extraction_method = "google_vision_ocr"`, and feeds clean text into single-page chunking.
 4. **How is Rule R2 enforced?**  
-   In [`chunking/page_chunker.py`](file:///e:/Dummy/chunking/page_chunker.py), every chunk is instantiated with `page_start = page_number` and `page_end = page_number`. Gate 1 in `audit_quality.py` asserts this invariant for 100% of chunks with 0 allowed violations.
+   In [`chunking/page_chunker.py`](chunking/page_chunker.py), every chunk is instantiated with `page_start = page_number` and `page_end = page_number`. Gate 1 in `audit_quality.py` asserts this invariant for 100% of chunks with 0 allowed violations.
 5. **How are credentials secured?**  
    All credentials are read dynamically from environment variables through [`config.py`](file:///e:/Dummy/config.py) using `quote_plus` encoding for reserved characters and strict TLS `sslmode`. Zero hardcoded passwords exist in source code.

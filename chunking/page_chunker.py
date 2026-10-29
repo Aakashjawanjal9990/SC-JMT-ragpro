@@ -8,13 +8,13 @@ All parameters dynamically loaded from environment configuration (.env).
 import re
 from typing import List, Optional, Tuple
 try:
-    from core.models import ChunkRecord, ChunkMetadata
-    from parsing.structure_tracker import LawReportStructureTracker
-    from config import config
-except ImportError:
     from PCEV2.core.models import ChunkRecord, ChunkMetadata
     from PCEV2.parsing.structure_tracker import LawReportStructureTracker
     from PCEV2.config import config
+except ImportError:
+    from core.models import ChunkRecord, ChunkMetadata
+    from parsing.structure_tracker import LawReportStructureTracker
+    from config import config
 
 
 CITATION_PROTECTION_PATTERNS = [

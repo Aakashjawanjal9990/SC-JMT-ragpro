@@ -4,12 +4,16 @@ Streams and downloads Supreme Court judgment PDFs directly from GCP buckets for 
 """
 
 import os
-import sys
 import re
 import tempfile
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple
+
+try:
+    from config import config
+except ImportError:  # package-style execution
+    from PCEV2.config import config
 
 logger = logging.getLogger("GCSLoader")
 
@@ -18,8 +22,12 @@ class GCSDataLoader:
     """Manages GCP Cloud Storage connections and streams PDFs from production buckets."""
 
     def __init__(self, bucket_name: Optional[str] = None, project_id: Optional[str] = None):
-        self.bucket_name = bucket_name or os.getenv("GCS_BUCKET", "sc-judgments-dev-data")
-        self.project_id = project_id or os.getenv("GCP_PROJECT", "sc-judgments-dev")
+        self.bucket_name = (bucket_name or config.gcs_bucket or "").strip()
+        self.project_id = (project_id or config.gcp_project or "").strip()
+        if not self.bucket_name or not self.project_id:
+            raise ValueError(
+                "GCS ingestion requires GCS_BUCKET and GCP_PROJECT to be configured explicitly."
+            )
         self.client = None
         self.bucket = None
         self._init_client()
@@ -38,29 +46,31 @@ class GCSDataLoader:
         """Returns True if GCS client and bucket connection are active."""
         return self.client is not None and self.bucket is not None
 
-    def list_year_pdfs(self, year: int, prefix_base: str = "raw_pdfs/pdfs") -> List[str]:
+    def list_year_pdfs(self, year: int, prefix_base: Optional[str] = None) -> List[str]:
         """Lists all PDF blob paths in GCS for a given judgment year."""
         if not self.is_available():
             raise RuntimeError(f"GCS connection unavailable. Cannot list blobs for year {year}.")
 
+        prefix_base = (prefix_base or config.gcs_prefix).strip("/")
         prefix = f"{prefix_base}/year={year}/"
         blobs = self.client.list_blobs(self.bucket_name, prefix=prefix)
-        pdf_paths = [f"gs://{self.bucket_name}/{b.name}" for b in blobs if b.name.endswith(".pdf")]
+        pdf_paths = [f"gs://{self.bucket_name}/{b.name}" for b in blobs if b.name.lower().endswith(".pdf")]
         logger.info(f"Discovered {len(pdf_paths)} PDFs in GCS for year {year} under prefix: {prefix}")
         return pdf_paths
 
-    def list_available_pdfs(self, year: Optional[int] = None, prefix_base: str = "raw_pdfs/pdfs") -> List[str]:
+    def list_available_pdfs(self, year: Optional[int] = None, prefix_base: Optional[str] = None) -> List[str]:
         """Lists available PDF URIs in GCS. Compatible with batch runner expectations."""
         if not self.is_available():
             raise RuntimeError(f"GCS connection unavailable. Cannot list blobs for bucket '{self.bucket_name}'.")
+        prefix_base = (prefix_base or config.gcs_prefix).strip("/")
         if year is not None:
             return self.list_year_pdfs(year=year, prefix_base=prefix_base)
         blobs = self.client.list_blobs(self.bucket_name, prefix=prefix_base)
-        pdf_paths = [f"gs://{self.bucket_name}/{b.name}" for b in blobs if b.name.endswith(".pdf")]
+        pdf_paths = [f"gs://{self.bucket_name}/{b.name}" for b in blobs if b.name.lower().endswith(".pdf")]
         logger.info(f"Discovered {len(pdf_paths)} PDFs in GCS under prefix: {prefix_base}")
         return pdf_paths
 
-    def download_to_temp(self, gcs_uri: str) -> Tuple[str, int]:
+    def download_to_temp(self, gcs_uri: str) -> Tuple[str, Optional[int]]:
         """
         Downloads a GCS PDF to a local temporary file for PyMuPDF processing.
         Returns: (temp_file_path, year)
@@ -83,7 +93,7 @@ class GCSDataLoader:
             year = int(yr_match.group(1))
         else:
             fn_match = re.match(r"(\d{4})_", Path(blob_name).name)
-            year = int(fn_match.group(1)) if fn_match else 2026
+            year = int(fn_match.group(1)) if fn_match else None
 
         suffix = Path(blob_name).suffix or ".pdf"
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="gcs_scj_")
@@ -97,82 +107,3 @@ class GCSDataLoader:
             raise
         logger.info(f"Downloaded GCS blob {gcs_uri} -> {tmp_path}")
         return tmp_path, year
-
-    @classmethod
-    def verify_contract(cls) -> Dict[str, Any]:
-        """
-        Validates GCSDataLoader method interface and mock discovery contract (OFF-003).
-        Tests list_year_pdfs, list_available_pdfs, and download_to_temp interface contracts.
-        """
-        has_list_avail = hasattr(cls, "list_available_pdfs")
-        has_list_yr = hasattr(cls, "list_year_pdfs")
-        has_download = hasattr(cls, "download_to_temp")
-        has_is_avail = hasattr(cls, "is_available")
-
-        if not (has_list_avail and has_list_yr and has_download and has_is_avail):
-            return {
-                "passed": False,
-                "detail": f"Missing methods: list_avail={has_list_avail}, list_yr={has_list_yr}, download={has_download}"
-            }
-
-        # Mock blob and bucket for contract validation
-        class MockBlob:
-            def __init__(self, name):
-                self.name = name
-
-        class MockBucket:
-            def __init__(self, name):
-                self.name = name
-            def blob(self, name):
-                return MockBlob(name)
-
-        class MockStorageClient:
-            def list_blobs(self, bucket_name, prefix=""):
-                if "year=" in prefix:
-                    return [
-                        MockBlob(f"{prefix}1950_1_10_EN.pdf"),
-                        MockBlob(f"{prefix}1950_2_20_EN.pdf")
-                    ]
-                return [
-                    MockBlob(f"{prefix}/year=1950/1950_1_10_EN.pdf"),
-                    MockBlob(f"{prefix}/year=2026/2026_1_10_EN.pdf")
-                ]
-            def bucket(self, name):
-                return MockBucket(name)
-
-        loader = cls(bucket_name="test-scj-bucket", project_id="test-scj-proj")
-        loader.client = MockStorageClient()
-        loader.bucket = MockBucket("test-scj-bucket")
-
-        # Test 1: list_year_pdfs
-        yr_uris = loader.list_year_pdfs(year=1950)
-        valid_yr = len(yr_uris) == 2 and all(u.startswith("gs://test-scj-bucket/") and u.endswith(".pdf") for u in yr_uris)
-
-        # Test 2: list_available_pdfs with year
-        avail_yr_uris = loader.list_available_pdfs(year=1950)
-        valid_avail_yr = len(avail_yr_uris) == 2
-
-        # Test 3: list_available_pdfs without year (corpus wide)
-        all_uris = loader.list_available_pdfs(year=None)
-        valid_all = len(all_uris) == 2 and all(u.startswith("gs://test-scj-bucket/") and u.endswith(".pdf") for u in all_uris)
-
-        passed = bool(valid_yr and valid_avail_yr and valid_all)
-        detail = "Verified list_year_pdfs, list_available_pdfs, and gs:// URI discovery contract" if passed else "Mock GCS discovery validation failed"
-        return {"passed": passed, "detail": detail}
-
-
-if __name__ == "__main__":
-    result = GCSDataLoader.verify_contract()
-    print("=" * 80)
-    print("=== GCS LOADER API CONTRACT VERIFICATION ===")
-    print("=" * 80)
-    print(f"Contract Status: {'PASSED' if result['passed'] else 'FAILED'}")
-    print(f"Detail: {result['detail']}")
-    print("=" * 80)
-    if result["passed"]:
-        print(">>> [SUCCESS] GCS discovery contract and API methods verified (100% PASS).")
-        sys.exit(0)
-    else:
-        print(">>> [FAIL] GCS discovery contract verification failed.")
-        sys.exit(1)
-

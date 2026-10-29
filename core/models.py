@@ -3,7 +3,7 @@ Domain Models for Supreme Court Judgment RAG Pipeline (PCE v2.0)
 Conforms strictly to db/schema.sql (Rule R1) and single-page invariant (Rule R2).
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 
 
@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 class PageMetadata:
     """Document-level legal metadata extracted primarily from page 1."""
     case_number: Optional[str] = None
-    case_title: Optional[str] = None
     appellant: Optional[str] = None
     respondent: Optional[str] = None
     date_of_judgment: Optional[str] = None
@@ -86,3 +85,6 @@ class DocumentRecord:
     metadata: PageMetadata
     pages: List[ExtractedPageZones] = field(default_factory=list)
     chunks: List[ChunkRecord] = field(default_factory=list)
+    # Computed from the exact input bytes before temporary GCS files are removed.
+    source_sha256: Optional[str] = None
+    file_size_bytes: Optional[int] = None

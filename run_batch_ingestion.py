@@ -1,6 +1,6 @@
 """
 Batch Ingestion and Quality Certification Harness (PCE v2.0)
-Processes Supreme Court judgment PDFs (1950 historical scans & 2026 digital) into production database.
+Processes Supreme Court judgment PDFs from configured local or cloud sources.
 Supports high-throughput parallel multiprocessing across 43,000+ judgments with strict quality certification.
 """
 
@@ -10,6 +10,8 @@ import time
 import shutil
 import logging
 import argparse
+import json
+import tempfile
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 
@@ -23,7 +25,14 @@ from config import config, resolve_database_url
 from storage.init_db import init_database
 from pipeline import IngestionPipeline
 from storage.gcs_loader import GCSDataLoader
-from audit_quality import run_quality_audit
+from audit_quality import QualityAuditor, run_quality_audit
+
+
+def _document_id_for(path_or_uri: str) -> str:
+    """Mirror IngestionPipeline's document-ID derivation (filename stem)."""
+    if path_or_uri.startswith("gs://"):
+        return Path(path_or_uri[5:].split("/", 1)[-1]).stem
+    return Path(path_or_uri).stem
 
 
 def worker_process_pdf(args):
@@ -37,6 +46,77 @@ def worker_process_pdf(args):
         return {"success": True, "record": rec, "error": None, "file": pdf_path}
     except Exception as e:
         return {"success": False, "record": None, "error": str(e), "file": pdf_path}
+
+
+def write_failure_manifest(failures, output_dir: Path) -> Path:
+    """Atomically persist failed inputs without logging document contents/secrets."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest = output_dir / "ingestion_failures.json"
+    payload = {
+        "failed_count": len(failures),
+        "failures": failures,
+    }
+    fd, tmp_name = tempfile.mkstemp(prefix="ingestion_failures_", suffix=".tmp", dir=str(output_dir))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp_name, manifest)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return manifest
+
+
+def mark_document_persistence_status(document_id: str, year: int, success: bool, error: str = "") -> None:
+    """Finalize the worker-created lifecycle record after parent DB persistence."""
+    status_path = config.logss_dir / f"year={year}" / f"{document_id}_status.json"
+    if not status_path.exists():
+        raise FileNotFoundError(f"Lifecycle status file missing for {document_id}: {status_path}")
+    with open(status_path, "r", encoding="utf-8") as stream:
+        payload = json.load(stream)
+    stages = payload.setdefault("stages", {})
+    vector_stage = stages.setdefault("vector_db", {"status": "PENDING", "duration_sec": 0.0})
+    vector_stage["status"] = "COMPLETED" if success else "FAILED"
+    if not success:
+        payload["error"] = error or "Database persistence failed in parent process"
+    elif payload.get("error") is None:
+        payload["error"] = None
+    payload["overall_status"] = (
+        "SUCCESS" if success and all(v.get("status") == "COMPLETED" for v in stages.values()) else "FAILED"
+    )
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{status_path.name}.", suffix=".tmp", dir=str(status_path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp_name, status_path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    markdown_path = status_path.with_suffix(".md")
+    with open(markdown_path, "w", encoding="utf-8") as stream:
+        stream.write(f"# Status Log: {document_id}\n\n")
+        stream.write(f"- **Case Title**: {payload.get('case_title', document_id)}\n")
+        stream.write(f"- **Year**: {year}\n")
+        stream.write(f"- **Overall Status**: `{payload['overall_status']}`\n")
+        stream.write(f"- **Pages**: {payload.get('total_pages', 0)} | **Chunks**: {payload.get('total_chunks', 0)} | **OCR Quality**: {payload.get('ocr_quality', 0):.3f}\n")
+        stream.write(f"- **Duration**: {payload.get('total_duration_sec', 0)}s\n\n")
+        stream.write("| Stage | Status | Duration (s) |\n| :--- | :---: | ---: |\n")
+        for stage, details in stages.items():
+            stream.write(f"| `{stage}` | {details.get('status')} | {details.get('duration_sec', 0)} |\n")
+
+
+def _failure(file_path: str, error: str, phase: str = "ingestion") -> dict:
+    return {"file": str(file_path), "phase": phase, "error": str(error)[:2000]}
 
 
 def main():
@@ -58,6 +138,12 @@ def main():
     print("=" * 85)
 
     use_alloydb = (args.target == "alloydb" or os.getenv("DATABASE_TARGET", "").lower() in ("alloydb", "postgres", "postgresql"))
+    config.validate_runtime(target=args.target, require_gcs=args.gcs)
+
+    if args.workers < 1:
+        parser.error("--workers must be >= 1")
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be >= 1 when provided")
 
     if args.reset:
         env_mode = os.getenv("ENVIRONMENT", "development").lower()
@@ -104,7 +190,7 @@ def main():
         if not p_path.exists():
             print(f"[ERROR] Specified PDF does not exist: {args.pdf}")
             sys.exit(1)
-        target_files.append((str(p_path), args.year or 2026))
+        target_files.append((str(p_path), args.year))
     elif args.dir:
         d_path = Path(args.dir)
         if not d_path.exists():
@@ -113,17 +199,14 @@ def main():
         for f in sorted(d_path.glob("**/*.pdf")):
             if args.limit and len(target_files) >= args.limit:
                 break
-            target_files.append((str(f), args.year or 2026))
+            target_files.append((str(f), args.year))
     elif args.gcs:
         print(">> Connecting to Google Cloud Storage (GCS)...")
         gcs_loader = GCSDataLoader()
         if not gcs_loader.is_available():
             raise RuntimeError(f"Cannot stream from GCS: Client or bucket '{gcs_loader.bucket_name}' is unavailable.")
 
-        if args.year is not None:
-            uris = gcs_loader.list_year_pdfs(year=args.year)
-        else:
-            uris = gcs_loader.list_available_pdfs(year=None)
+        uris = gcs_loader.list_available_pdfs(year=args.year)
         if args.limit:
             uris = uris[:args.limit]
         for uri in uris:
@@ -132,19 +215,34 @@ def main():
         # Default local scan from data directory
         data_pdfs = list(config.data_dir.glob("**/*.pdf")) if config.data_dir.exists() else []
         for f in data_pdfs[:args.limit or len(data_pdfs)]:
-            target_files.append((str(f), args.year or 2026))
+            target_files.append((str(f), args.year))
+
+    # Document IDs derive from the filename stem; two inputs sharing a stem would
+    # overwrite each other in the database, so fail before any work is done.
+    first_seen = {}
+    collisions = []
+    for fpath, _yr in target_files:
+        doc_id = _document_id_for(fpath)
+        if doc_id in first_seen and first_seen[doc_id] != fpath:
+            collisions.append(f"{doc_id}: {first_seen[doc_id]} vs {fpath}")
+        first_seen.setdefault(doc_id, fpath)
+    if collisions:
+        raise RuntimeError(
+            "Duplicate document IDs would overwrite each other: " + "; ".join(collisions[:10])
+        )
 
     total_count = len(target_files)
     print(f"\n>> Queued {total_count} judgment PDFs for parallel batch ingestion (Workers: {args.workers})...\n")
 
     if total_count == 0:
-        print(">> No PDFs found to process. Specify --pdf <path>, --dir <path>, --gcs, or place PDFs in data/ directory.")
-        return
+        print("[ERROR] No PDFs found to process. This is not a successful ingestion run.")
+        sys.exit(2)
 
     t0 = time.time()
     total_saved = 0
     total_chunks = 0
     failed_files = []
+    failure_details = []
     log_interval = max(1, total_count // 20)
 
     if args.workers <= 1 or total_count <= 2:
@@ -157,9 +255,11 @@ def main():
                     total_chunks += len(rec.chunks)
                 else:
                     failed_files.append(name)
+                    failure_details.append(_failure(fpath, "Pipeline returned no document record"))
             except Exception as e:
                 print(f"[ERROR] Ingestion failed for {name}: {e}")
                 failed_files.append(name)
+                failure_details.append(_failure(fpath, e))
 
             if idx % log_interval == 0 or idx == total_count:
                 elapsed = time.time() - t0
@@ -172,15 +272,28 @@ def main():
             for idx, res in enumerate(executor.map(worker_process_pdf, target_files, chunksize=4), 1):
                 if res and res.get("success") and res.get("record"):
                     rec = res["record"]
-                    pipeline.loader.save_document_record(rec)
-                    total_saved += 1
-                    total_chunks += len(rec.chunks)
-                    name = Path(rec.file_path).name
+                    try:
+                        pipeline.loader.save_document_record(rec)
+                        mark_document_persistence_status(rec.document_id, rec.year, success=True)
+                        total_saved += 1
+                        total_chunks += len(rec.chunks)
+                        name = Path(rec.file_path).name
+                    except Exception as save_error:
+                        try:
+                            mark_document_persistence_status(rec.document_id, rec.year, success=False, error=str(save_error))
+                        except Exception:
+                            logger.exception("Could not mark persistence failure for %s", rec.document_id)
+                        file_name = Path(res.get("file", rec.file_path)).name
+                        print(f"[PERSISTENCE ERROR] Failed on {file_name}: {save_error}")
+                        failed_files.append(file_name)
+                        failure_details.append(_failure(res.get("file", rec.file_path), save_error, "persistence"))
+                        name = f"FAILED: {file_name}"
                 else:
                     file_name = Path(res.get("file", "unknown")).name if res else "unknown_file"
                     err_msg = res.get("error") if res else "Worker failure"
                     print(f"[WORKER ERROR] Failed on {file_name}: {err_msg}")
                     failed_files.append(file_name)
+                    failure_details.append(_failure(res.get("file", file_name) if res else file_name, err_msg, "worker"))
                     name = f"FAILED: {file_name}"
 
                 if idx % log_interval == 0 or idx == total_count:
@@ -194,30 +307,65 @@ def main():
     print(f"\n>> Ingestion finished in {elapsed:.2f}s ({elapsed/60:.2f}m)!")
     print(f">> Total judgments saved: {total_saved:,} / {total_count:,} | Total active chunks: {total_chunks:,}")
 
+    if failure_details:
+        try:
+            failure_manifest = write_failure_manifest(failure_details, config.reports_dir)
+            print(f">> Failure manifest written: {failure_manifest}")
+        except Exception as manifest_error:
+            print(f"[CRITICAL ERROR] Could not persist failure manifest: {manifest_error}")
+            failure_details.append(_failure("<failure-manifest>", manifest_error, "reporting"))
+
     # Run Data Quality and Integrity Verification (OFF-002, OFF-010)
     print("\n" + "=" * 85)
     print("=== RUNNING DATA QUALITY & INTEGRITY VERIFICATION ===")
     print("=" * 85)
-    gate_results = run_quality_audit(chunks_dir=config.chunks_dir, db_url=target_db_url)
+    try:
+        gate_results = run_quality_audit(chunks_dir=config.chunks_dir, db_url=target_db_url)
+    except Exception as audit_error:
+        logger.exception("Quality audit could not complete")
+        gate_results = {
+            "all_passed": False,
+            "all_strict_passed": False,
+            "quality_checks": {
+                "QUALITY_AUDIT_EXECUTION": {
+                    "status": "BLOCKED",
+                    "detail": f"Audit raised {type(audit_error).__name__}: {audit_error}",
+                }
+            },
+        }
+        failure_details.append(_failure("<quality-audit>", audit_error, "quality_gate"))
     checks = gate_results.get("quality_checks", {})
     for check_name, info in checks.items():
-        print(f"{check_name:<28} | {info['status']:<10} | {info['detail']}")
+        print(f"{check_name:<28} | {info.get('status', 'BLOCKED'):<10} | {info.get('detail', 'Missing gate detail')}")
     print("-" * 85)
 
     # OFF-005 & OFF-010: Strict failure exit contract
     has_failed_docs = len(failed_files) > 0
-    all_passed = bool(gate_results.get("all_passed", False))
+    all_passed = bool(gate_results.get("all_passed", False)) and bool(checks) and all(
+        info.get("status") == "PASSED" for info in checks.values()
+    )
 
     if has_failed_docs:
         print(f"\n[CRITICAL ERROR] Batch ingestion failed on {len(failed_files)} documents:")
         for fn in failed_files:
             print(f"  - {fn}")
 
-    if all_passed and not has_failed_docs:
-        print(">>> [SUCCESS] ALL DATA QUALITY AND INTEGRITY CHECKS VERIFIED (100% PASS). CERTIFIED FOR PRODUCTION.")
+    if all_passed and not has_failed_docs and total_saved == total_count:
+        print(">>> [SUCCESS] All executed quality gates passed and all queued documents were saved. This run is not, by itself, a production certification.")
         sys.exit(0)
     else:
-        print("\n[CRITICAL ERROR] Production certification failed: quality gates failed or document failures occurred.")
+        print("\n[CRITICAL ERROR] Ingestion run failed: a mandatory quality gate failed/was blocked, or queued documents were not all saved.")
+        failed_gate_items = [
+            _failure("<quality-gates>", f"{name}: {info.get('detail', info.get('status', 'failed'))}", "quality_gate")
+            for name, info in checks.items() if info.get("status") != "PASSED"
+        ]
+        failure_details.extend(failed_gate_items)
+        if not failure_details:
+            failure_details.append(_failure("<batch>", "Saved count did not reconcile with queued count", "reconciliation"))
+        try:
+            write_failure_manifest(failure_details, config.reports_dir)
+        except Exception:
+            logger.exception("Could not update failure manifest")
         sys.exit(1)
     print("=" * 85)
 

@@ -1,14 +1,17 @@
 """
 Production Ingestion Pipeline Orchestrator (PCE v2.0)
-Scales across 43,000+ Supreme Court judgments (1950 historical scans & 2026 digital).
+Scales across Supreme Court judgments from configured historical and current datasets.
 """
 
 import os
 import sys
 import json
+import time
 import logging
+import hashlib
+import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import List, Dict, Any, Optional
 
 import fitz  # PyMuPDF
 
@@ -27,11 +30,37 @@ from parsing.structure_tracker import LawReportStructureTracker
 from chunking.page_chunker import PageChunker
 from embedding.vertex_embedder import VertexEmbedder
 from storage.db_loader import DatabaseLoader
-from storage.stage_tracker import DocumentStageTracker, export_verification_csv
+from storage.stage_tracker import DocumentStageTracker, export_verification_csv, safe_filename
 from storage.gcs_loader import GCSDataLoader
 from local_ocr.router import LocalOCRRouter, PageRoutingDecision
 from local_ocr.engine import LocalOCREngine
-from local_ocr.layout_recovery import purge_ocr_running_headers
+
+
+def _sha256_file(path: str, chunk_size: int = 1024 * 1024) -> str:
+    """Hash source bytes in bounded memory for local and downloaded GCS PDFs."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for block in iter(lambda: source.read(chunk_size), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _atomic_write_json(path: Path, payload: Any, *, indent: Optional[int] = None) -> None:
+    """Write JSON via a same-directory temporary file to avoid partial artifacts."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=indent, separators=None if indent else (",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
 
 
 class IngestionPipeline:
@@ -88,37 +117,49 @@ class IngestionPipeline:
             active_path = pdf_path
 
         p_obj = Path(active_path)
-        doc_id = p_obj.stem
+        if pdf_path.startswith("gs://"):
+            # Temporary download names are random; identity must come from the
+            # stable object path so repeated GCS ingestions remain idempotent.
+            gcs_object = pdf_path[5:].split("/", 1)[1] if "/" in pdf_path[5:] else ""
+            doc_id = Path(gcs_object).stem if gcs_object else p_obj.stem
+        else:
+            doc_id = p_obj.stem
         if year is None:
             parts = doc_id.split("_")
-            year = int(parts[0]) if parts and parts[0].isdigit() else 2026
+            candidate_year = int(parts[0]) if parts and parts[0].isdigit() else None
+            year = candidate_year if candidate_year and 1800 <= candidate_year <= 2200 else None
+        if year is None:
+            if temp_file_to_clean and os.path.exists(temp_file_to_clean):
+                os.remove(temp_file_to_clean)
+            raise ValueError(
+                f"Judgment year is unknown for {pdf_path!r}. Pass --year or use a filename/GCS path containing the four-digit judgment year; refusing to assign a fabricated year."
+            )
 
-        tracker = DocumentStageTracker(
-            document_id=doc_id,
-            file_path=str(active_path),
-            year=year,
-            case_title="Supreme Court Judgment"
-        )
+        tracker = DocumentStageTracker(document_id=doc_id, file_path=str(pdf_path), year=year, case_title=doc_id)
+        source_file_size = 0
+        source_sha256 = None
 
         try:
             tracker.start_stage("provenance")
+            source_file_size = os.path.getsize(active_path)
+            source_sha256 = _sha256_file(active_path)
             doc = fitz.open(active_path)
             total_pages = len(doc)
             if total_pages == 0:
-                logger.warning(f"Empty document: {active_path}")
-                return None
+                raise ValueError(f"PDF contains no pages: {active_path}")
 
-            # Extract Global Document Metadata
-            doc_meta = LegalMetadataExtractor.extract_metadata_from_pdf(active_path, doc_id=doc_id)
-            case_title = doc_meta.case_title or "Supreme Court Judgment"
-            tracker.case_title = case_title
+            # Extract metadata from native front matter. Scanned first pages may
+            # initially have no native text; metadata is enriched again after OCR.
+            native_front_matter = "\n".join(
+                (doc[i].get_text("text") or "") for i in range(min(2, total_pages))
+            )
+            doc_meta = LegalMetadataExtractor.extract_metadata(native_front_matter)
             tracker.complete_stage("provenance")
 
             # -------------------------------------------------------------
             # STAGE 1: Parsing, Coordinate Zoning & Conditional OCR
             # -------------------------------------------------------------
             tracker.start_stage("parsing")
-            structure_tracker = LawReportStructureTracker(bench_judges=doc_meta.judges or [])
             id_parts = doc_id.split("_")
             start_book_p = int(id_parts[2]) if len(id_parts) >= 4 and id_parts[2].isdigit() else 1
 
@@ -149,75 +190,140 @@ class IngestionPipeline:
 
                 pz.cleaned_text = cl_text
 
-                # Evaluate page routing via 8-Rule Conditional OCR Router
+                # Evaluate page routing. A page requiring OCR must never silently
+                # flow downstream as an empty/verified-blank page when OCR fails.
                 routing_res = self.router.evaluate_page(
                     page=page_obj,
                     page_number=pno,
                     total_pages=total_pages,
                     document_id=doc_id
                 )
+                native_text = (pz.cleaned_text or "").strip()
+                decision = routing_res.decision
+                ocr_required = decision == PageRoutingDecision.USE_PADDLE_OCR
+                ocr_attempted = decision in (
+                    PageRoutingDecision.USE_PADDLE_OCR,
+                    PageRoutingDecision.USE_PP_STRUCTURE,
+                    PageRoutingDecision.FLAG_FOR_REVIEW,
+                )
 
-                if routing_res.decision in (
-                    PageRoutingDecision.USE_GOOGLE_OCR,
-                    PageRoutingDecision.FLAG_FOR_REVIEW
-                ):
-                    try:
-                        ocr_res = self.engine.ocr_page(page_obj, page_number=pno, allow_mock=config.allow_mock_embeddings)
-                        raw_text = (ocr_res.text or "").strip() if ocr_res else ""
-                        if raw_text:
-                            cleaned = purge_ocr_running_headers(raw_text, is_first_page=(pno == 1))
-                            pz.cleaned_text = CoordinateZoneExtractor.heal_ocr_degradations(cleaned)
-                            pz.extraction_method = "google_vision_ocr"
-                            pz.ocr_quality = max(0.70, getattr(ocr_res, "average_confidence", 0.95))
-                        elif ocr_res and ocr_res.error:
-                            logger.warning(f"Google Vision OCR warning on {doc_id} p.{pno}: {ocr_res.error}")
-                            pz.extraction_method = "ocr_failed"
-                            pz.ocr_quality = 0.0
-                    except Exception as e:
-                        logger.error(f"Google Vision OCR invocation failure on {doc_id} p.{pno}: {e}")
-                        pz.extraction_method = "ocr_failed"
-                        pz.ocr_quality = 0.0
-
-                elif routing_res.decision == PageRoutingDecision.SKIP_BLANK:
+                if decision == PageRoutingDecision.SKIP_BLANK:
+                    pz.cleaned_text = ""
                     pz.extraction_method = "verified_blank"
                     pz.ocr_quality = 1.0
-                    pz.cleaned_text = ""
-
-                elif routing_res.decision == PageRoutingDecision.SKIP_NATIVE_OK:
-                    if not pz.cleaned_text.strip() and routing_res.reasons and "rescued_raw_text" in routing_res.reasons[0]:
-                        pz.cleaned_text = (page_obj.get_text("text") or "").strip()
-                        pz.extraction_method = "pymupdf_fallback"
-
-                # Final fallback guard if text is still empty
-                if not pz.cleaned_text.strip():
-                    images = page_obj.get_images() if hasattr(page_obj, "get_images") else []
-                    raw_chars = len((page_obj.get_text("text") or "").strip())
-                    if images and pz.extraction_method not in ("ocr_failed", "google_vision_ocr", "google_vision_structure"):
-                        try:
-                            ocr_res = self.engine.ocr_page(page_obj, page_number=pno, allow_mock=config.allow_mock_embeddings)
-                            raw_text = (ocr_res.text or "").strip() if ocr_res else ""
-                            if raw_text:
-                                cleaned = purge_ocr_running_headers(raw_text, is_first_page=(pno == 1))
+                elif decision == PageRoutingDecision.SKIP_NATIVE_OK:
+                    if not native_text:
+                        raw_text = (page_obj.get_text("text") or "").strip()
+                        if raw_text:
+                            pz.cleaned_text = raw_text
+                            pz.extraction_method = "pymupdf_fallback"
+                            pz.ocr_quality = CoordinateZoneExtractor.calculate_ocr_quality(
+                                raw_text, pz.is_born_digital
+                            )
+                        else:
+                            # Router/native disagreement is not proof of a blank page.
+                            pz.extraction_method = "needs_review"
+                            pz.ocr_quality = 0.0
+                elif ocr_attempted:
+                    ocr_res = None
+                    try:
+                        ocr_res = self.engine.ocr_page(
+                            page_obj, page_number=pno,
+                            allow_mock=config.allow_mock_embeddings
+                        )
+                        if ocr_res is not None:
+                            ocr_text = (getattr(ocr_res, "text", "") or "").strip()
+                            ocr_error = getattr(ocr_res, "error", None)
+                            if ocr_text:
+                                cleaned = purge_ocr_running_headers(ocr_text, is_first_page=(pno == 1))
                                 pz.cleaned_text = CoordinateZoneExtractor.heal_ocr_degradations(cleaned)
                                 pz.extraction_method = "google_vision_ocr"
-                                pz.ocr_quality = max(0.70, getattr(ocr_res, "average_confidence", 0.95))
-                            else:
+                                confidence = float(getattr(ocr_res, "average_confidence", 0.95) or 0.95)
+                                pz.ocr_quality = max(0.70, min(1.0, confidence))
+                            elif ocr_error:
+                                logger.warning("Google Vision OCR failed for %s page %s: %s", doc_id, pno, ocr_error)
+                                if native_text and not ocr_required:
+                                    pz.cleaned_text = native_text
+                                    pz.extraction_method = "native_text_ocr_failed_review"
+                                    pz.ocr_quality = min(float(getattr(pz, "ocr_quality", 0.0) or 0.0), 0.5)
+                                else:
+                                    pz.extraction_method = "ocr_failed"
+                                    pz.ocr_quality = 0.0
+                            elif ocr_required:
                                 pz.extraction_method = "ocr_failed"
                                 pz.ocr_quality = 0.0
-                        except Exception as ocr_err:
-                            logger.warning(f"Fallback OCR rescue failed on {doc_id} p.{pno}: {ocr_err}")
+                    except Exception:
+                        logger.exception("OCR processing failed for %s page %s", doc_id, pno)
+                        if native_text and not ocr_required:
+                            pz.cleaned_text = native_text
+                            pz.extraction_method = "native_text_ocr_failed_review"
+                            pz.ocr_quality = min(float(getattr(pz, "ocr_quality", 0.0) or 0.0), 0.5)
+                        else:
                             pz.extraction_method = "ocr_failed"
                             pz.ocr_quality = 0.0
-                    elif raw_chars > 0 and pz.extraction_method != "ocr_failed":
-                        pz.cleaned_text = (page_obj.get_text("text") or "").strip()
-                        pz.extraction_method = "pymupdf_fallback"
-                        pz.ocr_quality = CoordinateZoneExtractor.calculate_ocr_quality(pz.cleaned_text, pz.is_born_digital)
-                    elif pz.extraction_method != "ocr_failed":
-                        pz.extraction_method = "verified_blank"
-                        pz.ocr_quality = 1.0
 
+                    if not pz.cleaned_text.strip() and decision != PageRoutingDecision.SKIP_BLANK:
+                        if ocr_required or not native_text:
+                            raise RuntimeError(
+                                f"No verified text for document {doc_id}, physical page {pno} "
+                                f"(routing={decision.value}, extraction={pz.extraction_method}); "
+                                "document was not persisted."
+                            )
+                        pz.extraction_method = "native_text_ocr_failed_review"
+                        pz.ocr_quality = min(float(getattr(pz, "ocr_quality", 0.0) or 0.0), 0.5)
+
+                # Last-resort native extraction is allowed only when actual text exists.
+                # An empty page is considered blank only when the router explicitly says so.
+                if not pz.cleaned_text.strip() and pz.extraction_method not in ("verified_blank", "ocr_failed"):
+                    raw_text = (page_obj.get_text("text") or "").strip()
+                    if raw_text:
+                        pz.cleaned_text = raw_text
+                        pz.extraction_method = "pymupdf_fallback"
+                        pz.ocr_quality = CoordinateZoneExtractor.calculate_ocr_quality(
+                            raw_text, pz.is_born_digital
+                        )
+                    else:
+                        pz.extraction_method = "needs_review"
+                        pz.ocr_quality = 0.0
                 pages_data.append(pz)
 
+            unresolved_pages = [
+                p.page_number for p in pages_data
+                if not (p.cleaned_text or "").strip()
+                and p.extraction_method != "verified_blank"
+            ]
+            if unresolved_pages:
+                raise RuntimeError(
+                    f"Document {doc_id} has unresolved empty pages: {unresolved_pages[:20]}. "
+                    "The document was not persisted."
+                )
+
+            # Re-extract metadata using OCR-enriched text where native front matter
+            # was absent. Preserve previously found fields rather than replacing them
+            # with lower-confidence/missing values.
+            enriched_front_matter = "\n".join(
+                (p.cleaned_text or "") for p in pages_data[:2]
+            )
+            enriched_meta = LegalMetadataExtractor.extract_metadata(enriched_front_matter)
+            for field_name in (
+                "case_number", "appellant", "respondent", "date_of_judgment",
+                "year", "scr_citation", "author",
+            ):
+                if not getattr(doc_meta, field_name, None) and getattr(enriched_meta, field_name, None):
+                    setattr(doc_meta, field_name, getattr(enriched_meta, field_name))
+            if not doc_meta.judges and enriched_meta.judges:
+                doc_meta.judges = enriched_meta.judges
+            if not doc_meta.counsel and enriched_meta.counsel:
+                doc_meta.counsel = enriched_meta.counsel
+            if not doc_meta.case_law_cited and enriched_meta.case_law_cited:
+                doc_meta.case_law_cited = enriched_meta.case_law_cited
+            if doc_meta.year:
+                year = doc_meta.year if year is None else year
+            case_title = " v. ".join(
+                value for value in (doc_meta.appellant, doc_meta.respondent) if value
+            ) or doc_id or "Supreme Court Judgment"
+            tracker.case_title = case_title
+            structure_tracker = LawReportStructureTracker(bench_judges=doc_meta.judges or [])
             tracker.complete_stage("parsing")
 
             # -------------------------------------------------------------
@@ -247,6 +353,8 @@ class IngestionPipeline:
                     c.chunk_index = len(all_chunks)
                     all_chunks.append(c)
 
+            if not all_chunks:
+                raise RuntimeError(f"Document {doc_id} produced no retrievable text chunks; refusing to certify it as ingested.")
             tracker.complete_stage("chunking")
 
             # -------------------------------------------------------------
@@ -266,39 +374,46 @@ class IngestionPipeline:
                 year=year,
                 metadata=doc_meta,
                 pages=pages_data,
-                chunks=all_chunks
+                chunks=all_chunks,
+                source_sha256=source_sha256,
+                file_size_bytes=source_file_size,
             )
             if save_db and self.loader:
                 self.loader.save_document_record(doc_record)
+            else:
+                # In multiprocessing mode, the parent process owns DB persistence.
+                # Do not claim the database stage succeeded before that commit occurs.
+                tracker.complete_stage("vector_db", status="DEFERRED")
 
             # Persist chunk JSON for external auditing
-            chunk_json_path = config.chunks_dir / f"{doc_id}_chunks.json"
-            with open(chunk_json_path, "w", encoding="utf-8") as f:
-                json.dump([{
-                    "chunk_id": c.chunk_id,
-                    "document_id": c.document_id,
-                    "page_start": c.page_start,
-                    "page_end": c.page_end,
-                    "chunk_index": c.chunk_index,
-                    "content": c.content,
-                    "section": c.section,
-                    "embedding_dim": len(c.embedding) if c.embedding else 0,
-                    "metadata": c.metadata.__dict__
-                } for c in all_chunks], f, separators=(',', ':'))
+            chunk_json_path = config.chunks_dir / f"{safe_filename(doc_id)}_chunks.json"
+            _atomic_write_json(chunk_json_path, [{
+                "chunk_id": c.chunk_id,
+                "document_id": c.document_id,
+                "page_start": c.page_start,
+                "page_end": c.page_end,
+                "chunk_index": c.chunk_index,
+                "content": c.content,
+                "section": c.section,
+                "embedding_dim": len(c.embedding) if c.embedding else 0,
+                "metadata": c.metadata.__dict__
+            } for c in all_chunks])
 
-            # Persist document JSON
-            doc_json_path = config.documents_dir / f"{doc_id}.json"
-            with open(doc_json_path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "document_id": doc_id,
-                    "year": year,
-                    "case_title": case_title,
-                    "total_pages": total_pages,
-                    "total_chunks": len(all_chunks),
-                    "metadata": doc_meta.__dict__
-                }, f, indent=2)
+            # Persist document JSON atomically as well.
+            doc_json_path = config.documents_dir / f"{safe_filename(doc_id)}.json"
+            _atomic_write_json(doc_json_path, {
+                "document_id": doc_id,
+                "year": year,
+                "case_title": case_title,
+                "total_pages": total_pages,
+                "total_chunks": len(all_chunks),
+                "source_sha256": source_sha256,
+                "file_size_bytes": source_file_size,
+                "metadata": doc_meta.__dict__
+            }, indent=2)
 
-            tracker.complete_stage("vector_db")
+            if save_db and self.loader:
+                tracker.complete_stage("vector_db")
             # Finalize Tracker & Save Logs
             avg_q = sum(p.ocr_quality for p in pages_data) / max(1, len(pages_data))
 
@@ -322,30 +437,32 @@ class IngestionPipeline:
             except Exception as e:
                 logger.warning(f"Failed to export verification CSV: {e}")
 
-        except Exception as e:
-            logger.error(f"Pipeline error processing {doc_id}: {e}")
-            tracker.finalize(
-                total_pages=total_pages if "total_pages" in locals() else 0,
-                total_chunks=len(all_chunks) if "all_chunks" in locals() else 0,
-                ocr_quality=0.0,
-                error=str(e)
-            )
-            try:
-                export_verification_csv(config.logss_dir / "pipeline_verification_master.csv")
-            except Exception:
-                pass
-            raise e
-
+        except Exception as exc:
+            if "tracker" in locals():
+                try:
+                    tracker.fail_stage()
+                    # Record an explicit failed lifecycle state; do not mask the
+                    # original exception if the status-file write also fails.
+                    tracker.finalize(
+                        total_pages=(len(doc) if doc is not None else 0),
+                        total_chunks=0,
+                        ocr_quality=0.0,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                except Exception:
+                    logger.exception("Unable to persist failed lifecycle status for %s", doc_id)
+            logger.exception("Ingestion failed for %s", pdf_path)
+            raise
         finally:
             if doc is not None:
                 try:
                     doc.close()
                 except Exception:
-                    pass
+                    logger.debug("Failed to close PDF handle for %s", pdf_path, exc_info=True)
             if temp_file_to_clean and os.path.exists(temp_file_to_clean):
                 try:
                     os.remove(temp_file_to_clean)
                 except OSError as e:
-                    logger.warning(f"Could not remove temp file {temp_file_to_clean}: {e}")
+                    logger.warning("Could not remove temporary file %s: %s", temp_file_to_clean, e)
 
         return doc_record

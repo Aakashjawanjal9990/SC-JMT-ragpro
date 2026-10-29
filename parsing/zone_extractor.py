@@ -11,11 +11,11 @@ import re
 import unicodedata
 from typing import List, Tuple, Optional, Any
 try:
-    from core.models import ExtractedPageZones
-    from config import config
-except ImportError:
     from PCEV2.core.models import ExtractedPageZones
     from PCEV2.config import config
+except ImportError:
+    from core.models import ExtractedPageZones
+    from config import config
 
 logger = logging.getLogger(__name__)
 

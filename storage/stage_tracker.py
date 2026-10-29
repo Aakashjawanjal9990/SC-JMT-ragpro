@@ -1,32 +1,53 @@
 """
-Document Lifecycle Stage Tracker and Verification CSV Exporter (PCE v2.0)
-Tracks provenance -> parsing -> chunking -> embedding -> vector_db stages.
-Guarantees full run failure accounting, stage timing, and CSV reconciliation.
+4-Stage Document Lifecycle Tracker and CSV Exporter (PCE v2.0)
+Tracks parsing -> chunking -> embedding -> vector_db stages.
 """
 
 import csv
 import json
+import os
+import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional
+try:
+    from PCEV2.config import config
+except ImportError:
+    from config import config
 
-from config import config
+
+def safe_filename(name: str) -> str:
+    """Restrict a document ID to a safe filename component (DB IDs are unchanged)."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", str(name)).lstrip(".")
+    return cleaned or "document"
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write text via a same-directory temp file so readers never see partial output."""
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 class DocumentStageTracker:
-    """Tracks document processing status across all ingestion stages."""
+    """Tracks document processing status across the 4 ingestion stages."""
 
-    def __init__(
-        self,
-        document_id: str,
-        file_path: str = "",
-        year: int = 2026,
-        case_title: str = "Supreme Court Judgment"
-    ):
+    def __init__(self, document_id: str, file_path: str = "", year: int = 0, case_title: str = ""):
         self.document_id = document_id
-        self.file_path = str(file_path)
+        self.file_path = file_path
         self.year = year
-        self.case_title = case_title
+        self.case_title = case_title or document_id
         self.stages = {
             "provenance": {"status": "PENDING", "duration_sec": 0.0},
             "parsing": {"status": "PENDING", "duration_sec": 0.0},
@@ -39,35 +60,30 @@ class DocumentStageTracker:
         self._current_stage_t0 = None
 
     def start_stage(self, stage_name: str):
-        if stage_name not in self.stages:
-            self.stages[stage_name] = {"status": "PENDING", "duration_sec": 0.0}
-        self.stages[stage_name]["status"] = "IN_PROGRESS"
-        self._current_stage_t0 = time.time()
+        if stage_name in self.stages:
+            self.stages[stage_name]["status"] = "IN_PROGRESS"
+            self._current_stage_t0 = time.time()
 
     def complete_stage(self, stage_name: str, status: str = "COMPLETED"):
-        if stage_name not in self.stages:
-            self.stages[stage_name] = {"status": "PENDING", "duration_sec": 0.0}
-        dur = (time.time() - self._current_stage_t0) if self._current_stage_t0 else 0.0
-        self.stages[stage_name]["status"] = status
-        self.stages[stage_name]["duration_sec"] = round(dur, 3)
+        if stage_name in self.stages:
+            dur = (time.time() - self._current_stage_t0) if self._current_stage_t0 else 0.0
+            self.stages[stage_name]["status"] = status
+            self.stages[stage_name]["duration_sec"] = round(dur, 3)
 
-    def finalize(
-        self,
-        total_pages: int = 0,
-        total_chunks: int = 0,
-        ocr_quality: float = 0.0,
-        error: Optional[str] = None
-    ):
-        if error:
-            self.overall_status = "FAILED"
-            # Mark any remaining IN_PROGRESS or PENDING stages as FAILED
-            for st, info in self.stages.items():
-                if info["status"] in ("IN_PROGRESS", "PENDING"):
-                    info["status"] = "FAILED"
-        else:
-            all_ok = all(s["status"] == "COMPLETED" for s in self.stages.values())
-            self.overall_status = "SUCCESS" if all_ok else "FAILED"
 
+    def fail_stage(self, stage_name: Optional[str] = None) -> None:
+        """Mark the named/current in-progress stage failed without masking the root error."""
+        if stage_name and stage_name in self.stages:
+            self.stages[stage_name]["status"] = "FAILED"
+            return
+        for name, details in self.stages.items():
+            if details["status"] == "IN_PROGRESS":
+                details["status"] = "FAILED"
+                return
+
+    def finalize(self, total_pages: int, total_chunks: int, ocr_quality: float, error: Optional[str] = None):
+        all_ok = all(s["status"] == "COMPLETED" for s in self.stages.values())
+        self.overall_status = "SUCCESS" if all_ok and error is None else "FAILED"
         total_time = round(time.time() - self._t0, 3)
 
         payload = {
@@ -87,24 +103,24 @@ class DocumentStageTracker:
         # Save year-partitioned deliverables
         year_dir = config.logss_dir / f"year={self.year}"
         year_dir.mkdir(parents=True, exist_ok=True)
-        json_path = year_dir / f"{self.document_id}_status.json"
-        md_path = year_dir / f"{self.document_id}_status.md"
+        file_stem = safe_filename(self.document_id)
+        json_path = year_dir / f"{file_stem}_status.json"
+        md_path = year_dir / f"{file_stem}_status.md"
 
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+        md_lines = [
+            f"# Status Log: {self.document_id}\n\n",
+            f"- **Case Title**: {self.case_title}\n",
+            f"- **Year**: {self.year}\n",
+            f"- **Overall Status**: `{self.overall_status}`\n",
+            f"- **Pages**: {total_pages} | **Chunks**: {total_chunks} | **OCR Quality**: {ocr_quality:.3f}\n",
+            f"- **Duration**: {total_time}s\n\n",
+            "| Stage | Status | Duration (s) |\n| :--- | :---: | :---: |\n",
+        ]
+        for st, info in self.stages.items():
+            md_lines.append(f"| `{st}` | {info['status']} | {info['duration_sec']} |\n")
 
-        with open(md_path, "w", encoding="utf-8") as f:
-            f.write(f"# Status Log: {self.document_id}\n\n")
-            f.write(f"- **Case Title**: {self.case_title}\n")
-            f.write(f"- **Year**: {self.year}\n")
-            f.write(f"- **Overall Status**: `{self.overall_status}`\n")
-            f.write(f"- **Pages**: {total_pages} | **Chunks**: {total_chunks} | **OCR Quality**: {ocr_quality:.3f}\n")
-            f.write(f"- **Duration**: {total_time}s\n")
-            if error:
-                f.write(f"- **Error**: `{error}`\n")
-            f.write("\n| Stage | Status | Duration (s) |\n| :--- | :---: | :---: |\n")
-            for st, info in self.stages.items():
-                f.write(f"| `{st}` | {info['status']} | {info['duration_sec']} |\n")
+        _atomic_write_text(json_path, json.dumps(payload, indent=2))
+        _atomic_write_text(md_path, "".join(md_lines))
 
         return payload
 
@@ -130,8 +146,8 @@ def export_verification_csv(log_payloads: Optional[Any] = None, year_filter: Opt
     filtered = [p for p in payloads if (year_filter is None or p.get("year") == year_filter)]
     headers = [
         "document_id", "case_title", "year", "overall_status", "total_pages", "total_chunks",
-        "ocr_quality", "provenance_status", "parsing_status", "chunking_status", "embedding_status", "vector_db_status",
-        "total_duration_sec", "error"
+        "ocr_quality", "parsing_status", "chunking_status", "embedding_status", "vector_db_status",
+        "total_duration_sec"
     ]
 
     try:
@@ -148,14 +164,13 @@ def export_verification_csv(log_payloads: Optional[Any] = None, year_filter: Opt
                     p.get("total_pages"),
                     p.get("total_chunks"),
                     p.get("ocr_quality"),
-                    stages.get("provenance", {}).get("status", "N/A"),
-                    stages.get("parsing", {}).get("status", "N/A"),
-                    stages.get("chunking", {}).get("status", "N/A"),
-                    stages.get("embedding", {}).get("status", "N/A"),
-                    stages.get("vector_db", {}).get("status", "N/A"),
-                    p.get("total_duration_sec"),
-                    p.get("error") or ""
+                    stages.get("parsing", {}).get("status"),
+                    stages.get("chunking", {}).get("status"),
+                    stages.get("embedding", {}).get("status"),
+                    stages.get("vector_db", {}).get("status"),
+                    p.get("total_duration_sec")
                 ])
+    
     except (PermissionError, OSError):
         pass
 

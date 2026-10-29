@@ -11,16 +11,17 @@ import json
 import uuid
 import hashlib
 import datetime
+from pathlib import Path
 from typing import Optional
 import sqlalchemy as sa
 from sqlalchemy import create_engine, text
 
 try:
-    from core.models import DocumentRecord
-    from config import config
-except ImportError:
     from PCEV2.core.models import DocumentRecord
     from PCEV2.config import config
+except ImportError:
+    from core.models import DocumentRecord
+    from config import config
 
 
 class DatabaseLoader:
@@ -63,10 +64,12 @@ class DatabaseLoader:
         extraction_run_uuid = str(uuid.uuid5(ns, f"er_{doc_rec.document_id}"))
         model_uuid = str(uuid.uuid5(ns, f"{emb_prov}_{config.embedding_model_id}"))
 
-        file_size = os.path.getsize(doc_rec.file_path) if (doc_rec.file_path and os.path.exists(doc_rec.file_path)) else 0
-        file_sha256 = None
-        if doc_rec.file_path and os.path.exists(doc_rec.file_path):
-            # OFF-10: Stream hash in bounded 64 KiB chunks for constant memory
+        file_size = int(doc_rec.file_size_bytes or 0)
+        if not file_size and doc_rec.file_path and os.path.exists(doc_rec.file_path):
+            file_size = os.path.getsize(doc_rec.file_path)
+        file_sha256 = doc_rec.source_sha256
+        if not file_sha256 and doc_rec.file_path and os.path.exists(doc_rec.file_path):
+            # Stream the local source hash in bounded chunks when not precomputed.
             h = hashlib.sha256()
             with open(doc_rec.file_path, "rb") as f:
                 for chunk in iter(lambda: f.read(65536), b""):
@@ -166,7 +169,7 @@ class DatabaseLoader:
             raw_sp = str(doc_rec.file_path or "")
             try:
                 norm_storage_path = Path(raw_sp).resolve().relative_to(config.base_dir).as_posix()
-            except Exception:
+            except (ValueError, OSError):
                 norm_storage_path = raw_sp.replace("\\", "/")
 
             sf_params = {
