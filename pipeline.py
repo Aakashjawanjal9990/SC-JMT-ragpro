@@ -34,6 +34,7 @@ from storage.stage_tracker import DocumentStageTracker, export_verification_csv,
 from storage.gcs_loader import GCSDataLoader
 from local_ocr.router import LocalOCRRouter, PageRoutingDecision
 from local_ocr.engine import LocalOCREngine
+from local_ocr.layout_recovery import purge_ocr_running_headers
 
 
 def _sha256_file(path: str, chunk_size: int = 1024 * 1024) -> str:

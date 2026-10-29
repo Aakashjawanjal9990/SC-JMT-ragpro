@@ -1,0 +1,15 @@
+.git
+.gitignore
+.vscode
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+output/
+scratch/
+tests/
+.env
+.env.local
+*.log
+*.tmp
+

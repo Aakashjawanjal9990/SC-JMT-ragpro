@@ -128,6 +128,8 @@ def main():
     parser.add_argument("--year", type=int, default=None, help="Target judgment year")
     parser.add_argument("--limit", type=int, default=None, help="Limit total number of PDFs processed")
     parser.add_argument("--workers", type=int, default=config.default_ingestion_workers, help=f"Number of parallel worker processes (default: {config.default_ingestion_workers})")
+    parser.add_argument("--task-index", type=int, default=None, help="Cloud Run Task Index (0 to task-count - 1)")
+    parser.add_argument("--task-count", type=int, default=None, help="Total number of Cloud Run Tasks for parallel sharding")
     parser.add_argument("--target", choices=["local", "alloydb"], default=os.getenv("DATABASE_TARGET", "local"), help="Target database: 'local' (SQLite) or 'alloydb' (Google Cloud AlloyDB PostgreSQL 17)")
     parser.add_argument("--reset", action="store_true", help="Wipe database and output JSONs before ingestion (local dev only)")
     parser.add_argument("--yes", "-y", action="store_true", help="Acknowledge and confirm destructive operations without interactive prompt")
@@ -232,6 +234,18 @@ def main():
         raise RuntimeError(
             "Duplicate document IDs would overwrite each other: " + "; ".join(collisions[:10])
         )
+
+    # Cloud Run Jobs Task Array sharding (CLOUD_RUN_TASK_INDEX / CLOUD_RUN_TASK_COUNT)
+    task_index_env = os.getenv("CLOUD_RUN_TASK_INDEX")
+    task_count_env = os.getenv("CLOUD_RUN_TASK_COUNT")
+    task_index = args.task_index if args.task_index is not None else (int(task_index_env) if task_index_env is not None else 0)
+    task_count = args.task_count if args.task_count is not None else (int(task_count_env) if task_count_env is not None else 1)
+
+    if task_count > 1:
+        target_files.sort(key=lambda x: x[0])
+        total_unsharded = len(target_files)
+        target_files = [f for idx, f in enumerate(target_files) if idx % task_count == task_index]
+        print(f">> [Cloud Run Task Array] Task {task_index + 1}/{task_count}: Assigned shard of {len(target_files):,} / {total_unsharded:,} PDFs")
 
     total_count = len(target_files)
     print(f"\n>> Queued {total_count} judgment PDFs for parallel batch ingestion (Workers: {args.workers})...\n")
