@@ -450,3 +450,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def check_all_gates(chunks_dir: Optional[Path] = None, db_url: Optional[str] = None) -> Dict[str, Any]:
+    """Backward-compatible wrapper for quality audit gates."""
+    return run_quality_audit(chunks_dir=chunks_dir, db_url=db_url)

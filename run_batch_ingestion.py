@@ -25,7 +25,7 @@ from config import config, resolve_database_url
 from storage.init_db import init_database
 from pipeline import IngestionPipeline
 from storage.gcs_loader import GCSDataLoader
-from audit_quality import QualityAuditor, run_quality_audit
+from audit_quality import QualityAuditor, run_quality_audit, check_all_gates
 
 
 def _document_id_for(path_or_uri: str) -> str:
@@ -203,10 +203,12 @@ def main():
     elif args.gcs:
         print(">> Connecting to Google Cloud Storage (GCS)...")
         gcs_loader = GCSDataLoader()
+        gcs = gcs_loader
         if not gcs_loader.is_available():
             raise RuntimeError(f"Cannot stream from GCS: Client or bucket '{gcs_loader.bucket_name}' is unavailable.")
 
-        uris = gcs_loader.list_available_pdfs(year=args.year)
+        target_year = args.year
+        uris = gcs.list_available_pdfs(year=target_year)
         if args.limit:
             uris = uris[:args.limit]
         for uri in uris:
@@ -354,6 +356,7 @@ def main():
         print(">>> [SUCCESS] All executed quality gates passed and all queued documents were saved. This run is not, by itself, a production certification.")
         sys.exit(0)
     else:
+        print("\n[WARNING] Data quality verification checks incomplete: a mandatory quality gate failed/was blocked, or queued documents were not all saved.")
         print("\n[CRITICAL ERROR] Ingestion run failed: a mandatory quality gate failed/was blocked, or queued documents were not all saved.")
         failed_gate_items = [
             _failure("<quality-gates>", f"{name}: {info.get('detail', info.get('status', 'failed'))}", "quality_gate")

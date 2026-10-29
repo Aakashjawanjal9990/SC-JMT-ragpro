@@ -8,7 +8,7 @@ import re
 import tempfile
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
 
 try:
     from config import config
@@ -107,3 +107,66 @@ class GCSDataLoader:
             raise
         logger.info(f"Downloaded GCS blob {gcs_uri} -> {tmp_path}")
         return tmp_path, year
+
+
+    @classmethod
+    def verify_contract(cls) -> Dict[str, Any]:
+        """
+        Validates GCSDataLoader method interface and mock discovery contract (OFF-003).
+        Tests list_year_pdfs, list_available_pdfs, and download_to_temp interface contracts.
+        """
+        has_list_avail = hasattr(cls, "list_available_pdfs")
+        has_list_yr = hasattr(cls, "list_year_pdfs")
+        has_download = hasattr(cls, "download_to_temp")
+        has_is_avail = hasattr(cls, "is_available")
+
+        if not (has_list_avail and has_list_yr and has_download and has_is_avail):
+            return {
+                "passed": False,
+                "detail": f"Missing methods: list_avail={has_list_avail}, list_yr={has_list_yr}, download={has_download}"
+            }
+
+        # Mock blob and bucket for contract validation
+        class MockBlob:
+            def __init__(self, name):
+                self.name = name
+
+        class MockBucket:
+            def __init__(self, name):
+                self.name = name
+            def blob(self, name):
+                return MockBlob(name)
+
+        class MockStorageClient:
+            def list_blobs(self, bucket_name, prefix=""):
+                if "year=" in prefix:
+                    return [
+                        MockBlob(f"{prefix}1950_1_10_EN.pdf"),
+                        MockBlob(f"{prefix}1950_2_20_EN.pdf")
+                    ]
+                return [
+                    MockBlob(f"{prefix}/year=1950/1950_1_10_EN.pdf"),
+                    MockBlob(f"{prefix}/year=2026/2026_1_10_EN.pdf")
+                ]
+            def bucket(self, name):
+                return MockBucket(name)
+
+        loader = cls(bucket_name="test-scj-bucket", project_id="test-scj-proj")
+        loader.client = MockStorageClient()
+        loader.bucket = MockBucket("test-scj-bucket")
+
+        # Test 1: list_year_pdfs
+        yr_uris = loader.list_year_pdfs(year=1950)
+        valid_yr = len(yr_uris) == 2 and all(u.startswith("gs://test-scj-bucket/") and u.endswith(".pdf") for u in yr_uris)
+
+        # Test 2: list_available_pdfs with year
+        avail_yr_uris = loader.list_available_pdfs(year=1950)
+        valid_avail_yr = len(avail_yr_uris) == 2
+
+        # Test 3: list_available_pdfs without year (corpus wide)
+        all_uris = loader.list_available_pdfs(year=None)
+        valid_all = len(all_uris) == 2 and all(u.startswith("gs://test-scj-bucket/") and u.endswith(".pdf") for u in all_uris)
+
+        passed = bool(valid_yr and valid_avail_yr and valid_all)
+        detail = "Verified list_year_pdfs, list_available_pdfs, and gs:// URI discovery contract" if passed else "Mock GCS discovery validation failed"
+        return {"passed": passed, "detail": detail}

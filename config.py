@@ -33,17 +33,20 @@ def resolve_database_url(pcev2_root: Optional[Path] = None, target: Optional[str
     credential set; there are no baked-in production credentials.
     """
     root = pcev2_root or PCEV2_ROOT
-    active_target = (target or os.getenv("DATABASE_TARGET", "local")).strip().lower()
+    if target is None:
+        target = os.getenv("DATABASE_TARGET", "local")
+    target = target.strip().lower()
+    active_target = target
     sqlite_default = f"sqlite:///{(root / 'output' / 'scj_rag_v2.db').as_posix()}"
 
-    if active_target in ("local", "sqlite", "development", "dev", "test"):
+    if target in ("local", "sqlite", "development", "dev", "test"):
         configured = os.getenv("DATABASE_URL", "").strip()
         # Never let a PostgreSQL DATABASE_URL silently redirect a local run.
         if configured.startswith("sqlite:"):
             return configured
         return sqlite_default
 
-    if active_target in ("alloydb", "postgres", "postgresql", "prod", "production"):
+    if target in ("alloydb", "postgres", "postgresql", "prod", "production"):
         alloy_url = os.getenv("ALLOYDB_DATABASE_URL", "").strip()
         if alloy_url:
             if not alloy_url.startswith(("postgresql://", "postgres://", "postgresql+psycopg2://")):

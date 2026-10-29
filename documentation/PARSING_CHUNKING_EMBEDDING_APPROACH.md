@@ -105,10 +105,18 @@ PCE v2.0 resolves all historical OCR degradation and modern born-digital formatt
 
 ## 4. Chunking, Embeddings & Database Invariants
 
-### 4.1. Single-Page Invariant (Rule R2)
+### 4.1. Single-Page Invariant & Chunk Size Bounds (Rule R2)
 Every chunk strictly satisfies:
 $$\text{chunks.page\_start} == \text{chunks.page\_end}$$
 Chunks never cross physical page boundaries, ensuring pinpoint legal citations.
+
+**Exact Size Bounds Enforced by `PageChunker`**:
+- **Target Chunk Size**: `1,500` characters ($\approx 300 - 375$ tokens).
+- **Max Chunk Size (Hard Ceiling)**: `2,000` characters ($\approx 400 - 500$ tokens, strictly guaranteed $\le 512$ tokens).
+- **Min Chunk Size**: `150` characters ($\approx 30 - 38$ tokens, filters noise fragments).
+- **Min Alphabetic Content**: `15` alphabetic characters (`[a-zA-Z]`, rejects stray page numbers and isolated punctuation).
+- **Max Overlap**: `300` characters ($\approx 60 - 75$ tokens, applied only between paragraph sub-blocks on the same page).
+- **Full Handover Spec**: See [**`HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md`**](./HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md) for complete query templates, schema dictionaries, and HNSW index parameters.
 
 ### 4.2. Short Canonical Prefix & Vertex AI Embeddings (Rule R3)
 Contextual embedding text is prefixed with a concise ($\le 12$ words) canonical anchor:

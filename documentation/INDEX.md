@@ -4,14 +4,15 @@
 **Corpus**: 43,000+ Supreme Court Judgments (1950 Historical Scanned Reports to 2026 Born-Digital Judgments)  
 **Location**: `documentation/`
 
-This library contains all **27 engineering specifications, architectural walkthroughs, QA audit resolutions, OCR benchmarking reports, and retrieval evaluation studies** produced for the PCE v2.0 offline ingestion pipeline.
+This library contains all **engineering specifications, architectural walkthroughs, team handoff reports, QA audit resolutions, OCR benchmarking reports, and retrieval evaluation studies** produced for the PCE v2.0 offline ingestion pipeline.
 
 ---
 
-## 1. Production Deployment & Certification
+## 1. Team Handover & Production Deployment
 
 | Document | Purpose & Scope |
 | :--- | :--- |
+| **[`HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md`](./HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md)** | **🔥 Lead Retrieval Engineer Handover (Pratik)**: Definitive retrieval engineering specification covering chunk token bounds ($1,500$ char target, $\le 2,000$ char hard max), Rule R2 single-page guarantee, 768-dim $L_2$-normalized Vertex AI embeddings, AlloyDB HNSW / BM25 index definitions, `chunks.metadata` JSONB schema, and ready-to-run hybrid search SQL templates. |
 | **[`PRODUCTION_DEPLOYMENT_CERTIFICATION.md`](./PRODUCTION_DEPLOYMENT_CERTIFICATION.md)** | **Master Production Sign-Off**: Lead engineer accountability certification, root-cause resolution of Verity QA audit findings (OFF-001 to OFF-010), Cloud Run readiness, and deployment defense guide. |
 | **[`REVIEWER_WALKTHROUGH_PCE_V2.md`](./REVIEWER_WALKTHROUGH_PCE_V2.md)** | **Reviewer Walkthrough & Defense**: Line-by-line guide for evaluators demonstrating zero-DDL compliance, single-page chunking (Rule R2), and fail-closed quality gates. |
 | **[`TEAM_HANDOFF_MASTER_INDEX.md`](./TEAM_HANDOFF_MASTER_INDEX.md)** | **Team Handoff & Operations**: Master operational checklist, CLI cheat sheet, environment variables reference, and failure recovery protocols. |
@@ -23,7 +24,7 @@ This library contains all **27 engineering specifications, architectural walkthr
 
 | Document | Purpose & Scope |
 | :--- | :--- |
-| **[`MASTER_V1_TO_V2_FULL_ARCHITECTURE_AND_CODE_WALKTHROUGH.md`](./MASTER_V1_TO_V2_FULL_ARCHITECTURE_AND_CODE_WALKTHROUGH.md)** | **Exhaustive 45 KB Architecture Deep Dive**: Complete line-by-line code and system walkthrough covering PyMuPDF coordinate zoning, 8-rule OCR routing, single-page paragraph chunking, 768-dim embedding, and AlloyDB/PostgreSQL persistence. |
+| **[`MASTER_V1_TO_V2_FULL_ARCHITECTURE_AND_CODE_WALKTHROUGH.md`](./MASTER_V1_TO_V2_FULL_ARCHITECTURE_AND_CODE_WALKTHROUGH.md)** | **Exhaustive 45 KB Architecture Deep Dive**: Complete line-by-line code and system walkthrough covering PyMuPDF coordinate zoning, multi-tier Google Cloud Vision OCR routing, single-page paragraph chunking, 768-dim embedding, and AlloyDB/PostgreSQL persistence. |
 | **[`PCE_V2_Comprehensive_Architecture_Process_and_Changelog.md`](./PCE_V2_Comprehensive_Architecture_Process_and_Changelog.md)** | **Comprehensive Architecture & Changelog**: Full architectural workflow, stage-by-stage data contracts, and complete system changelog. |
 | **[`PCE_V2_APPROACH_AND_ARCHITECTURE.md`](./PCE_V2_APPROACH_AND_ARCHITECTURE.md)** | **Core Architecture Blueprint**: Data pipelines, relational integrity models, coordinate bounding-box math, and relational database loading. |
 | **[`PARSING_CHUNKING_EMBEDDING_APPROACH.md`](./PARSING_CHUNKING_EMBEDDING_APPROACH.md)** | **Layout-Aware Approach Specification**: Mathematical formulas for coordinate zoning, margin note stripping, citation protection, and single-page invariant enforcement. |
@@ -41,7 +42,7 @@ This library contains all **27 engineering specifications, architectural walkthr
 | **[`Supreme_Court_RAG_Comprehensive_Resolution_Report.md`](./Supreme_Court_RAG_Comprehensive_Resolution_Report.md)** | **Comprehensive Issue Resolution**: Systematic resolution log covering historical scan anomalies, shared boundary splits, and metadata extraction. |
 | **[`PCE_V2_SOLUTIONS_TO_RELIABILITY_REVIEW.md`](./PCE_V2_SOLUTIONS_TO_RELIABILITY_REVIEW.md)** | **Reliability Review Remediation**: Exact solutions implemented in response to engineering review findings. |
 | **[`PCE_V2_APPROACH_FINAL_WITH_CHANGES.md`](./PCE_V2_APPROACH_FINAL_WITH_CHANGES.md)** | **Final Approach Changelog**: Key structural changes made during final optimization and hardening. |
-| **[`PCE_V2_APPROACH_BASELINE_PRE_OCR.md`](./PCE_V2_APPROACH_BASELINE_PRE_OCR.md)** | **Pre-OCR Baseline**: Original baseline metrics before the integration of local conditional OCR. |
+| **[`PCE_V2_APPROACH_BASELINE_PRE_OCR.md`](./PCE_V2_APPROACH_BASELINE_PRE_OCR.md)** | **Pre-OCR Baseline**: Original baseline metrics before the integration of conditional OCR. |
 
 ---
 
@@ -49,9 +50,10 @@ This library contains all **27 engineering specifications, architectural walkthr
 
 | Document | Purpose & Scope |
 | :--- | :--- |
-| **[`Local_Conditional_PaddleOCR_Completion_Report.md`](./Local_Conditional_PaddleOCR_Completion_Report.md)** | **Local OCR Engine Specification**: 8-rule conditional OCR router, PaddleOCR integration, and PP-Structure fallback for tabular/complex judgment pages. |
+| **[`HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md`](./HANDOFF_PRATIK_RETRIEVAL_ENGINEER.md)** | **Google Cloud Vision OCR Specification**: Section 7 details the 4-tier fallback hierarchy (Google Cloud Vision gRPC $\to$ REST $\to$ PyMuPDF stream rescue $\to$ Tesseract), header purging, and OCR degradation healing. |
+| **[`Local_Conditional_PaddleOCR_Completion_Report.md`](./Local_Conditional_PaddleOCR_Completion_Report.md)** | **Historical OCR Phase 1 Report**: Prior local OCR evaluation report detailing router design patterns and initial 8-rule routing logic. |
 | **[`Local_OCR_20_PDFs_E2E_Pipeline_Test_Report.md`](./Local_OCR_20_PDFs_E2E_Pipeline_Test_Report.md)** | **20-PDF OCR Pipeline Validation**: Full empirical test results processing 20 historical scanned PDFs and modern born-digital judgments. |
-| **[`LlamaParse_Conditional_OCR_PoC_Report.md`](./LlamaParse_Conditional_OCR_PoC_Report.md)** | **Cloud vs Local OCR Comparison**: Comparative PoC evaluating cloud-based LlamaParse against local PaddleOCR on cost, latency, and privacy. |
+| **[`LlamaParse_Conditional_OCR_PoC_Report.md`](./LlamaParse_Conditional_OCR_PoC_Report.md)** | **Cloud vs Local OCR Comparison**: Comparative PoC evaluating cloud-based parsers against local/cloud vision engines on cost, latency, and privacy. |
 
 ---
 
@@ -66,4 +68,3 @@ This library contains all **27 engineering specifications, architectural walkthr
 | **[`PCE_v2_Executive_Report.md`](./PCE_v2_Executive_Report.md)** | **Executive Summary**: High-level overview of throughput, architecture, and business outcomes. |
 | **[`Supreme_Court_RAG_Baseline_Report.md`](./Supreme_Court_RAG_Baseline_Report.md)** | **Baseline Measurements**: Initial benchmark and performance baselines. |
 | **[`Supreme_Court_RAG_PCE_v2_Engineering_Approach.md`](./Supreme_Court_RAG_PCE_v2_Engineering_Approach.md)** | **Engineering Methodology**: High-level engineering approach and design decisions. |
-
