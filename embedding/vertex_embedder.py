@@ -114,9 +114,11 @@ class VertexEmbedder:
             batches = []
             curr_batch = []
             curr_tokens = 0
+            effective_batch = min(self.batch_size, 16)
             for t in texts:
-                est_tokens = max(len(t) // 3, 1)
-                if curr_batch and (len(curr_batch) >= self.batch_size or curr_tokens + est_tokens > 15000):
+                # Conservative estimation for legal text with punctuation: ~1 token per 2.5 chars
+                est_tokens = max(int(len(t) / 2.5), 1)
+                if curr_batch and (len(curr_batch) >= effective_batch or curr_tokens + est_tokens > 10000):
                     batches.append(curr_batch)
                     curr_batch = []
                     curr_tokens = 0
