@@ -58,9 +58,18 @@ jobs:
           python -m pip install --require-hashes \
             -r "${{ matrix.lockfile }}"
 
+      # Code quality checks
+      - name: Run Ruff Lint
+        run: python -m ruff check .
+
+      - name: Check Ruff Formatting
+        run: python -m ruff format --check .
+
+      # Test configuration
       - name: Verify Pytest Installation
         run: python -m pytest --version
 
+      # Automated tests and coverage
       - name: Run Automated Tests with Coverage
         env:
           CI: "true"
