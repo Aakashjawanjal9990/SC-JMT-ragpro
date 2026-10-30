@@ -7,6 +7,11 @@ export function validateProductionApiUrl(rawValue) {
     throw new Error('VITE_API_URL must be set for a production build.');
   }
 
+  // A same-origin /api base is served by the frontend host's BFF proxy.
+  if (rawValue.trim().replace(/\/+$/, '') === '/api') {
+    return null;
+  }
+
   let url;
 
   try {

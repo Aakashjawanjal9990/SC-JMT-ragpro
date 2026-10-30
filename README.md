@@ -29,11 +29,18 @@ that communicates with a FastAPI backend.
 
    Copy-Item .env.example .env
 
-4. Set VITE_API_URL in .env to your backend API URL.
+4. Keep `VITE_API_URL=http://localhost:8080/api` in `.env` for local development.
 
 5. Start the development server:
 
    npm run dev
+
+## Production
+
+Set `VITE_API_URL=/api` when building the production frontend. Set the Docker
+build argument `BFF_URL` to the HTTPS Cloud Run origin for the BFF, for example
+`https://your-bff-xxxxx-uc.a.run.app`. Nginx forwards `/api/*` to that origin
+while preserving the request path, query string, cookies, and CSRF header.
 
 ## Available Scripts
 

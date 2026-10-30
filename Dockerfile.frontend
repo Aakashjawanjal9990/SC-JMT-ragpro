@@ -10,9 +10,11 @@ COPY public/ ./public/
 COPY src/ ./src/
 
 ARG VITE_API_URL
+ARG BFF_URL
 ENV VITE_API_URL=${VITE_API_URL}
+ENV BFF_URL=${BFF_URL}
 
-RUN npm run build && node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; const apiUrl = new URL(process.env.VITE_API_URL); if (apiUrl.protocol !== 'https:' || apiUrl.username || apiUrl.password || apiUrl.search || apiUrl.hash || apiUrl.pathname.replace(/\/+$/, '') !== '/api') throw new Error('VITE_API_URL must be HTTPS, contain no credentials/query/fragment, and end with /api'); const configPath = '/frontend/nginx.frontend.conf'; const config = readFileSync(configPath, 'utf8'); if (!config.includes('__API_ORIGIN__')) throw new Error('CSP API-origin placeholder is missing'); writeFileSync(configPath, config.replaceAll('__API_ORIGIN__', apiUrl.origin));"
+RUN npm run build && node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; const rawApiUrl = process.env.VITE_API_URL; const sameOrigin = rawApiUrl?.trim().replace(/\/+$/, '') === '/api'; const bff = new URL(process.env.BFF_URL || ''); if (bff.protocol !== 'https:' || bff.username || bff.password || bff.search || bff.hash || bff.pathname !== '/') throw new Error('BFF_URL must be an HTTPS origin without credentials, path, query or fragment'); let apiOrigin = ''; if (!sameOrigin) { const apiUrl = new URL(rawApiUrl); if (apiUrl.protocol !== 'https:' || apiUrl.username || apiUrl.password || apiUrl.search || apiUrl.hash || apiUrl.pathname.replace(/\/+$/, '') !== '/api') throw new Error('VITE_API_URL must be /api or an HTTPS URL ending with /api'); apiOrigin = apiUrl.origin; } const configPath = '/frontend/nginx.frontend.conf'; const config = readFileSync(configPath, 'utf8'); if (!config.includes('__API_ORIGIN__') || !config.includes('__BFF_URL__')) throw new Error('Nginx proxy placeholders are missing'); writeFileSync(configPath, config.replaceAll('__API_ORIGIN__', apiOrigin).replaceAll('__BFF_URL__', bff.origin));"
 
 FROM nginx:alpine AS runtime
 
