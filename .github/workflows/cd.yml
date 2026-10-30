@@ -1,0 +1,175 @@
+name: CD - Deploy to Cloud Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_deploy:
+        description: "Select yes only when you are ready to deploy"
+        required: true
+        type: choice
+        options:
+          - "no"
+          - "yes"
+        default: "no"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-run-deployment
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: Run CI Tests
+    if: inputs.confirm_deploy == 'yes' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  deploy:
+    name: Build, Push, and Deploy
+    needs: ci
+    if: inputs.confirm_deploy == 'yes' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      AR_REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}
+      SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Validate Deployment Configuration
+        shell: bash
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          ARTIFACT_REGISTRY_REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}
+          CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_WIF_SERVICE_ACCOUNT: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+
+          for name in \
+            GCP_PROJECT_ID \
+            GCP_REGION \
+            ARTIFACT_REGISTRY_REPOSITORY \
+            CLOUD_RUN_SERVICE \
+            GCP_WIF_PROVIDER \
+            GCP_WIF_SERVICE_ACCOUNT
+          do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Required GitHub variable is missing: $name"
+              exit 1
+            fi
+          done
+
+          echo "Required deployment configuration is present."
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Set Up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Configure Docker Authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gcloud auth configure-docker \
+            "${REGION}-docker.pkg.dev" \
+            --quiet
+
+      - name: Build Docker Image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/${SERVICE_NAME}:${GITHUB_SHA}"
+
+          docker build --pull -t "${IMAGE_URI}" .
+
+          echo "IMAGE_URI=${IMAGE_URI}" >> "$GITHUB_ENV"
+
+      - name: Push Image to Artifact Registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker push "${IMAGE_URI}"
+
+      - name: Deploy to Cloud Run
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gcloud run deploy "${SERVICE_NAME}" \
+            --image="${IMAGE_URI}" \
+            --project="${PROJECT_ID}" \
+            --region="${REGION}" \
+            --platform=managed \
+            --port=8080 \
+            --quiet
+
+      - name: Verify Cloud Run Deployment
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SERVICE_URL="$(gcloud run services describe "${SERVICE_NAME}" \
+            --project="${PROJECT_ID}" \
+            --region="${REGION}" \
+            --format="value(status.url)")"
+
+          if [[ -z "${SERVICE_URL}" ]]; then
+            echo "::error::Cloud Run did not return a service URL."
+            exit 1
+          fi
+
+          echo "SERVICE_URL=${SERVICE_URL}" >> "$GITHUB_ENV"
+          echo "Cloud Run service URL retrieved successfully."
+
+      - name: Run Authenticated Health Check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ID_TOKEN="$(gcloud auth print-identity-token \
+            --audiences="${SERVICE_URL}")"
+
+          if [[ -z "${ID_TOKEN}" ]]; then
+            echo "::error::Failed to obtain an identity token."
+            exit 1
+          fi
+
+          HTTP_STATUS="$(curl \
+            --silent \
+            --show-error \
+            --output /tmp/health-response.json \
+            --write-out "%{http_code}" \
+            --max-time 30 \
+            --header "Authorization: Bearer ${ID_TOKEN}" \
+            "${SERVICE_URL}/health")"
+
+          if [[ "${HTTP_STATUS}" != "200" ]]; then
+            echo "::error::Health check failed with HTTP status ${HTTP_STATUS}."
+            cat /tmp/health-response.json
+            exit 1
+          fi
+
+          cat /tmp/health-response.json
+          echo "Cloud Run health check passed."
