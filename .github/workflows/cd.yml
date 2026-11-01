@@ -127,7 +127,7 @@ jobs:
             --vpc-egress=private-ranges-only \
             --port=8080 \
             --set-env-vars="APP_ENV=production,CORS_ORIGINS=${FRONTEND_ORIGIN},SESSION_COOKIE_NAME=__Host-nm_session,ADMIN_SESSION_COOKIE_NAME=__Host-nm_admin_session,SESSION_COOKIE_SAMESITE=none,SMTP_HOST=${SMTP_HOST},SMTP_PORT=587,SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL},SMTP_STARTTLS=true,RETRIEVAL_PORT_ADAPTER_ENABLED=false" \
-            --set-secrets="DATABASE_URL=backend-database-url:latest,REDIS_URL=backend-redis-url:latest,AUTH_CHALLENGE_SECRET=backend-auth-challenge-secret:latest,GROQ_API_KEY=backend-groq-api-key:latest,SMTP_USERNAME=backend-smtp-username:latest,SMTP_PASSWORD=backend-smtp-password:latest" \
+            --set-secrets="DATABASE_URL=scj-database-url:latest,REDIS_URL=backend-redis-url:latest,AUTH_CHALLENGE_SECRET=backend-auth-challenge-secret:latest,GROQ_API_KEY=backend-groq-api-key:latest,SMTP_USERNAME=backend-smtp-username:latest,SMTP_PASSWORD=backend-smtp-password:latest" \
             --concurrency=40 \
             --cpu=1 \
             --memory=1Gi \
