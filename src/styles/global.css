@@ -1560,9 +1560,6 @@ input.otp {
   gap: 8px;
 }
 
-
-
-
 /* =========================================
    FIXED NYAYA MITRA APPLICATION LAYOUT
 ========================================= */
@@ -1584,8 +1581,8 @@ body,
 
   display: grid;
   grid-template-areas:
-    "brand top"
-    "side main";
+    'brand top'
+    'side main';
 
   grid-template-columns: 250px minmax(0, 1fr);
   grid-template-rows: 58px minmax(0, 1fr);
@@ -1640,9 +1637,9 @@ body,
 @media (max-width: 860px) {
   .home-shell {
     grid-template-areas:
-      "brand"
-      "top"
-      "main";
+      'brand'
+      'top'
+      'main';
 
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: 58px auto minmax(0, 1fr);
