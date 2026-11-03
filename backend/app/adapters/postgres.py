@@ -92,20 +92,78 @@ class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
             document_ids = [UUID(value) for value in filters.document_ids]
         except ValueError:
             return []
+
+        has_metadata_filters = bool(
+            filters.date_from is not None
+            or filters.date_to is not None
+            or document_ids
+        )
+        if has_metadata_filters:
+            candidate_limit = max(limit * 10, 100)
+            params = {
+                "question": question,
+                "date_from": filters.date_from,
+                "date_to": filters.date_to,
+                "document_ids": document_ids,
+                "candidate_limit": candidate_limit,
+                "limit": limit,
+            }
+        else:
+            # With no judgment/source filters, let pg_textsearch produce a small
+            # BM25 candidate set first. Joining every current source file before
+            # applying the BM25 LIMIT made PostgreSQL scan and score hundreds of
+            # thousands of chunks for an unfiltered query.
+            query = text(
+                """
+                WITH ranked AS MATERIALIZED (
+                    SELECT c.chunk_uuid AS chunk_id,
+                           c.content <@> to_bm25query(:question, 'idx_chunks_bm25') AS bm25_score
+                    FROM chunks AS c
+                    WHERE c.is_active
+                      AND c.page_start IS NOT NULL
+                      AND c.page_end IS NOT NULL
+                    ORDER BY c.content <@> to_bm25query(:question, 'idx_chunks_bm25') ASC
+                    LIMIT :candidate_limit
+                )
+                SELECT c.chunk_uuid::text AS chunk_id,
+                       c.judgment_uuid::text AS document_id,
+                       c.source_file_uuid::text AS source_pdf_id,
+                       c.content AS text,
+                       array_agg(sp.page_number ORDER BY sp.page_number) AS pages,
+                       -ranked.bm25_score::float8 AS score
+                FROM ranked
+                JOIN chunks AS c ON c.chunk_uuid = ranked.chunk_id
+                JOIN judgments AS j ON j.judgment_uuid = c.judgment_uuid
+                JOIN source_files AS sf ON sf.source_file_uuid = c.source_file_uuid
+                JOIN source_pages AS sp
+                  ON sp.source_file_uuid = c.source_file_uuid
+                 AND sp.page_number BETWEEN c.page_start AND c.page_end
+                WHERE c.is_active
+                  AND sf.is_current
+                  AND sf.judgment_uuid = c.judgment_uuid
+                GROUP BY c.chunk_uuid, c.judgment_uuid, c.source_file_uuid, c.content,
+                         ranked.bm25_score
+                ORDER BY ranked.bm25_score ASC, c.chunk_uuid
+                LIMIT :limit
+                """
+            )
+            # Overfetch BM25 candidates before checking current-source integrity.
+            # This keeps the final result size stable if a few high-ranked chunks
+            # refer to stale source rows.
+            candidate_limit = max(limit * 100, 1_000)
+            params = {
+                "question": question,
+                "candidate_limit": candidate_limit,
+                "limit": limit,
+            }
+
         try:
             async with self._engine.connect() as connection:
                 rows = (
                     (
                         await connection.execute(
                             query,
-                            {
-                                "question": question,
-                                "date_from": filters.date_from,
-                                "date_to": filters.date_to,
-                                "document_ids": document_ids,
-                                "candidate_limit": max(limit * 10, 100),
-                                "limit": limit,
-                            },
+                            params,
                         )
                     )
                     .mappings()
