@@ -1,6 +1,7 @@
 """Adapt Pratik's grounded generator to the backend answer-generation port."""
 
 import asyncio
+import logging
 from collections.abc import Sequence
 
 from app.models import ConversationTurn, EvidenceInput
@@ -9,6 +10,8 @@ from app.ports import AnswerGenerationPort, DependencyUnavailable
 from app.retrieval.generator import AnswerGenerator
 from app.retrieval.llm import GroqChat
 from app.settings import Settings
+
+logger = logging.getLogger("supreme_court_rag.query.generation")
 
 
 class PratikAnswerGenerationAdapter(AnswerGenerationPort):
@@ -54,6 +57,16 @@ class PratikAnswerGenerationAdapter(AnswerGenerationPort):
                 self._generator.generate, question, passages
             )
         except Exception as exc:
+            logger.error(
+                "query.dependency_failed",
+                extra={
+                    "dependency": "groq",
+                    "operation": "answer_generation",
+                    "exception_type": type(exc).__name__,
+                    "provider_status": getattr(exc, "status_code", None),
+                    "provider_request_id": getattr(exc, "request_id", None),
+                },
+            )
             raise DependencyUnavailable("Pratik answer generation failed.") from exc
         if not generated.answered:
             return BackendAnswer(answer="", evidence_ids=[])
