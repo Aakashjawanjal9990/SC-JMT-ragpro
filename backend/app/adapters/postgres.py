@@ -1,5 +1,6 @@
 """PostgreSQL hybrid retrieval and citation-source adapter for Cloud SQL chunks."""
 
+import logging
 from collections.abc import Sequence
 from uuid import UUID
 
@@ -19,6 +20,8 @@ from app.ports import (
     SourceRecordPort,
     UnsupportedQueryFilter,
 )
+
+logger = logging.getLogger("supreme_court_rag.query.postgres")
 
 
 class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
@@ -107,6 +110,16 @@ class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
                     .all()
                 )
         except SQLAlchemyError as exc:
+            db_error = getattr(exc, "orig", exc)
+            logger.error(
+                "query.dependency_failed",
+                extra={
+                    "dependency": "postgres",
+                    "operation": "retrieve",
+                    "exception_type": type(db_error).__name__,
+                    "sqlstate": getattr(db_error, "sqlstate", None),
+                },
+            )
             raise DependencyUnavailable("PostgreSQL retrieval query failed.") from exc
         return [
             RetrievedPassage(
@@ -186,6 +199,16 @@ class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
             async with self._engine.connect() as connection:
                 rows = (await connection.execute(query, identity_params)).mappings().all()
         except SQLAlchemyError as exc:
+            db_error = getattr(exc, "orig", exc)
+            logger.error(
+                "query.dependency_failed",
+                extra={
+                    "dependency": "postgres",
+                    "operation": "resolve_sources",
+                    "exception_type": type(db_error).__name__,
+                    "sqlstate": getattr(db_error, "sqlstate", None),
+                },
+            )
             raise DependencyUnavailable("PostgreSQL source resolution failed.") from exc
         return [
             ResolvedEvidence(
