@@ -57,8 +57,10 @@ class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
                   AND sf.judgment_uuid = c.judgment_uuid
                   AND c.page_start IS NOT NULL
                   AND c.page_end IS NOT NULL
-                  AND (:date_from IS NULL OR j.judgment_date >= :date_from)
-                  AND (:date_to IS NULL OR j.judgment_date <= :date_to)
+                  AND (CAST(:date_from AS date) IS NULL
+                       OR j.judgment_date >= CAST(:date_from AS date))
+                  AND (CAST(:date_to AS date) IS NULL
+                       OR j.judgment_date <= CAST(:date_to AS date))
                   AND (cardinality(CAST(:document_ids AS uuid[])) = 0
                        OR j.judgment_uuid = ANY(CAST(:document_ids AS uuid[])))
                 ORDER BY c.content <@> to_bm25query(:question, 'idx_chunks_bm25') ASC
