@@ -12,7 +12,7 @@ class Settings:
     log_level: str = "INFO"
     cors_origins: tuple[str, ...] = ()
     max_context_chars: int = 80_000
-    request_timeout_seconds: float = 20.0
+    request_timeout_seconds: float = 60.0
     database_url: str | None = None
     redis_url: str | None = None
     auth_challenge_secret: str | None = None
@@ -31,7 +31,7 @@ class Settings:
     groq_api_key: str | None = None
     groq_model_id: str = "openai/gpt-oss-120b"
     groq_generation_reasoning_effort: str = "medium"
-    groq_generation_max_tokens: int = 2000
+    groq_generation_max_tokens: int = 4096
     groq_generation_timeout_seconds: float = 30.0
     groq_max_passage_chars: int = 6000
     groq_max_context_chars: int = 48_000
@@ -87,7 +87,7 @@ class Settings:
             raise ValueError("MAX_CONTEXT_CHARS must be between 1000 and 1000000.")
 
         try:
-            request_timeout_seconds = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "20"))
+            request_timeout_seconds = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "60"))
         except ValueError as exc:
             raise ValueError("REQUEST_TIMEOUT_SECONDS must be a number.") from exc
         if not 1 <= request_timeout_seconds <= 120:
@@ -172,7 +172,7 @@ class Settings:
             "GROQ_GENERATION_REASONING_EFFORT", "medium"
         ).strip()
         try:
-            groq_generation_max_tokens = int(os.getenv("GROQ_GENERATION_MAX_TOKENS", "2000"))
+            groq_generation_max_tokens = int(os.getenv("GROQ_GENERATION_MAX_TOKENS", "4096"))
             groq_generation_timeout_seconds = float(
                 os.getenv("GROQ_GENERATION_TIMEOUT_SECONDS", "30")
             )
