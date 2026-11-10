@@ -1,22 +1,26 @@
-# Dependencies and build output
-node_modules/
-dist/
-.vite/
+# Python caches, environments, and test output
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage*.xml
+htmlcov/
 
-# Environment variables and secrets
+# Local configuration and credentials
 .env
 .env.*
 !.env.example
 
-# Logs and local machine files
-*.log
-.DS_Store
+# JavaScript dependencies and build output
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Local IDE and operating-system files
+.idea/
 .vscode/
-
-# Local archives
-*.zip
-
-docs/
-test_server_cookies.py
-test_server.py
-.github/
+.DS_Store
+Thumbs.db

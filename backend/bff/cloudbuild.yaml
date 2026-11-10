@@ -1,0 +1,59 @@
+steps:
+  - id: validate-bff-deployment-settings
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        [[ "${_BACKEND_URL}" == https://* ]]
+        [[ "${_BACKEND_URL}" == https://*.run.app ]]
+        [[ "${_BACKEND_URL}" != *replace-with* ]]
+        [[ "${_BFF_SERVICE_ACCOUNT}" != *replace-with* ]]
+
+  - id: build-bff
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag=${_IMAGE}
+      - .
+
+  - id: push-bff
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_IMAGE}
+
+  - id: deploy-bff
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_IMAGE}
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --service-account=${_BFF_SERVICE_ACCOUNT}
+      - --set-env-vars=BACKEND_URL=${_BACKEND_URL}
+      - --port=8080
+      - --concurrency=80
+      - --cpu=1
+      - --memory=512Mi
+      - --max-instances=10
+      - --min-instances=0
+      - --timeout=120s
+
+images:
+  - ${_IMAGE}
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  dynamicSubstitutions: true
+
+substitutions:
+  _REGION: asia-south1
+  _SERVICE: supreme-court-rag-bff
+  _IMAGE: asia-south1-docker.pkg.dev/$PROJECT_ID/backend/bff:$COMMIT_SHA
+  _BFF_SERVICE_ACCOUNT: replace-with-backend-bff@$PROJECT_ID.iam.gserviceaccount.com
+  _BACKEND_URL: https://replace-with-backend-service-url

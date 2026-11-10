@@ -1,0 +1,3 @@
+# Only for the matching optional setting:
+sentence-transformers>=3.0                  # RETRIEVAL_EMBEDDING_PROVIDER=local or RETRIEVAL_RERANKER=cross-encoder
+google-cloud-alloydb-connector[pg8000]>=1.9 # RETRIEVAL_BM25_BACKEND=postgres (AlloyDB)

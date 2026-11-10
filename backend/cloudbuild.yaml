@@ -1,0 +1,90 @@
+steps:
+  - id: static-security-checks
+    name: python:3.12-slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - pip install -e '.[dev]' && ruff check app migrations && bandit -r app -ll && pip-audit
+
+  - id: validate-production-settings
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        require_value() {
+          local name="$1" value="$2"
+          if [[ -z "$value" || "$value" == *replace-with* ]]; then
+            echo "Set $name to its project-specific value before deploying" >&2
+            exit 1
+          fi
+        }
+
+        require_value _RUNTIME_SERVICE_ACCOUNT "${_RUNTIME_SERVICE_ACCOUNT}"
+        require_value _VPC_CONNECTOR "${_VPC_CONNECTOR}"
+        require_value _CORS_ORIGINS "${_CORS_ORIGINS}"
+        require_value _SMTP_HOST "${_SMTP_HOST}"
+        require_value _SMTP_FROM_EMAIL "${_SMTP_FROM_EMAIL}"
+        case "${_CORS_ORIGINS}" in https://*) ;; *) echo "_CORS_ORIGINS must use HTTPS" >&2; exit 1 ;; esac
+
+  - id: build-container
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag
+      - ${_IMAGE}
+      - .
+
+  - id: push-container
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_IMAGE}
+
+  - id: deploy-api
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_IMAGE}
+      - --region=${_REGION}
+      - --platform=managed
+      - --no-allow-unauthenticated
+      - --service-account=${_RUNTIME_SERVICE_ACCOUNT}
+      - --vpc-connector=${_VPC_CONNECTOR}
+      - --vpc-egress=private-ranges-only
+      - --set-env-vars=^@^APP_ENV=production@CORS_ORIGINS=${_CORS_ORIGINS}@SESSION_COOKIE_NAME=__Host-nm_session@SESSION_COOKIE_SAMESITE=${_SESSION_COOKIE_SAMESITE}@SMTP_HOST=${_SMTP_HOST}@SMTP_PORT=${_SMTP_PORT}@SMTP_FROM_EMAIL=${_SMTP_FROM_EMAIL}@SMTP_STARTTLS=true@RETRIEVAL_PORT_ADAPTER_ENABLED=false
+      - --set-secrets=DATABASE_URL=${_DATABASE_URL_SECRET}:latest,REDIS_URL=${_REDIS_URL_SECRET}:latest,AUTH_CHALLENGE_SECRET=${_AUTH_CHALLENGE_SECRET}:latest,GROQ_API_KEY=${_GROQ_API_KEY_SECRET}:latest,SMTP_USERNAME=${_SMTP_USERNAME_SECRET}:latest,SMTP_PASSWORD=${_SMTP_PASSWORD_SECRET}:latest
+      - --concurrency=40
+      - --cpu=1
+      - --memory=1Gi
+      - --max-instances=5
+      - --min-instances=0
+      - --timeout=120s
+
+images:
+  - ${_IMAGE}
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  dynamicSubstitutions: true
+
+substitutions:
+  _REGION: asia-south1
+  _SERVICE: supreme-court-rag-api
+  _IMAGE: asia-south1-docker.pkg.dev/$PROJECT_ID/backend/api:$COMMIT_SHA
+  _RUNTIME_SERVICE_ACCOUNT: replace-with-cloud-run-runtime@$PROJECT_ID.iam.gserviceaccount.com
+  _VPC_CONNECTOR: replace-with-serverless-vpc-connector
+  _DATABASE_URL_SECRET: backend-database-url
+  _REDIS_URL_SECRET: backend-redis-url
+  _GROQ_API_KEY_SECRET: backend-groq-api-key
+  _CORS_ORIGINS: https://replace-with-frontend-origin
+  _SESSION_COOKIE_SAMESITE: none
+  _SMTP_HOST: replace-with-smtp-host
+  _SMTP_PORT: "587"
+  _SMTP_FROM_EMAIL: replace-with-verified-sender-email
+  _AUTH_CHALLENGE_SECRET: backend-auth-challenge-secret
+  _SMTP_USERNAME_SECRET: backend-smtp-username
+  _SMTP_PASSWORD_SECRET: backend-smtp-password
