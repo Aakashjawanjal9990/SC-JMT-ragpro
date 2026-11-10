@@ -244,7 +244,7 @@ hr {
 
 /* watermark (scales) */
 .watermark {
-  position: absolute;
+  position: fixed;
   right: -70px;
   bottom: -30px;
   width: min(420px, 45vw);
@@ -1558,4 +1558,142 @@ input.otp {
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
+}
+
+/* =========================================
+   FIXED NYAYA MITRA APPLICATION LAYOUT
+========================================= */
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+.home-shell {
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+
+  display: grid;
+  grid-template-areas:
+    'brand top'
+    'side main';
+
+  grid-template-columns: 250px minmax(0, 1fr);
+  grid-template-rows: 58px minmax(0, 1fr);
+}
+
+/* Logo stays visible */
+.home-shell .shell-brand {
+  grid-area: brand;
+  position: relative;
+  z-index: 30;
+  background: #f4f4f4;
+  min-width: 0;
+}
+
+/* Navigation stays visible */
+.home-shell .shell-top {
+  grid-area: top;
+  position: relative;
+  z-index: 30;
+  background: #f4f4f4;
+  min-width: 0;
+}
+
+/* Sidebar stays visible and scrolls independently */
+.home-shell .sidebar {
+  grid-area: side;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+}
+
+/* Only main content scrolls */
+.home-shell .shell-main {
+  grid-area: main;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  min-width: 0;
+}
+
+/* Chat content */
+.home-shell .shell-content {
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Mobile and tablet */
+@media (max-width: 860px) {
+  .home-shell {
+    grid-template-areas:
+      'brand'
+      'top'
+      'main';
+
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 58px auto minmax(0, 1fr);
+  }
+
+  .home-shell .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(260px, 85vw);
+    height: 100dvh;
+    z-index: 40;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    overflow-y: auto;
+  }
+
+  .home-shell .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .home-shell .shell-main {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .home-shell .shell-content {
+    padding-inline: 16px;
+  }
+}
+
+/* Small mobile screens */
+@media (max-width: 520px) {
+  .home-shell .shell-brand {
+    padding-inline: 12px;
+  }
+
+  .home-shell .shell-top {
+    padding: 8px 10px;
+  }
+
+  .home-shell .shell-content {
+    padding: 16px 10px 0;
+  }
+
+  .home-shell .composer {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+
+  .home-shell .composer textarea {
+    font-size: 14px;
+  }
+
+  .home-shell .think {
+    padding-inline: 8px;
+  }
 }
