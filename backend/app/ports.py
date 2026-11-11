@@ -44,6 +44,14 @@ class DependencyUnavailable(RuntimeError):
     """Raised when a configured external service cannot complete an operation."""
 
 
+class DependencyRateLimited(DependencyUnavailable):
+    """Raised when an external dependency rejects a request due to rate limits."""
+
+    def __init__(self, message: str, retry_after: int = 30) -> None:
+        super().__init__(message)
+        self.retry_after = max(1, min(retry_after, 300))
+
+
 class UnsupportedQueryFilter(ValueError):
     """Raised when persistence cannot safely apply a requested query filter."""
 
