@@ -13,10 +13,12 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from app.adapters.fallback_generation import FallbackAnswerGeneration
+from app.adapters.groq_generation import GroqAnswerGenerationAdapter
 from app.adapters.local_test import LocalTestAnswerGeneration
 from app.adapters.postgres import PostgresQueryAdapter
-from app.adapters.pratik_generation import PratikAnswerGenerationAdapter
 from app.adapters.sqlite_sources import SqliteSourceRecordAdapter
+from app.adapters.vertex_generation import VertexAnswerGenerationAdapter
 from app.api.compat import router as compat_router
 from app.api.errors import register_error_handlers
 from app.api.routes import router
@@ -41,6 +43,17 @@ from app.security import OIDCVerifier
 from app.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+
+def _configured_answer_generation(settings: Settings) -> AnswerGenerationPort:
+    primary: AnswerGenerationPort = (
+        VertexAnswerGenerationAdapter(settings)
+        if VertexAnswerGenerationAdapter.is_configured(settings)
+        else UnconfiguredAnswerGeneration()
+    )
+    if settings.groq_api_key:
+        return FallbackAnswerGeneration(primary, GroqAnswerGenerationAdapter(settings))
+    return primary
 
 
 class _RetrievalSlot:
@@ -142,11 +155,7 @@ def create_app(
                 os.getenv("LOCAL_TEST_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
                 and resolved_settings.environment.lower() == "development"
             )
-            else (
-                PratikAnswerGenerationAdapter(resolved_settings)
-                if resolved_settings.groq_api_key
-                else UnconfiguredAnswerGeneration()
-            )
+            else _configured_answer_generation(resolved_settings)
         )
     )
 
@@ -158,7 +167,7 @@ def create_app(
             warmup = getattr(retrieval, "warmup", None)
             if warmup is not None:
                 await asyncio.to_thread(warmup)
-        if isinstance(answer_generation_adapter, PratikAnswerGenerationAdapter):
+        if isinstance(answer_generation_adapter, FallbackAnswerGeneration):
             await asyncio.to_thread(answer_generation_adapter.warmup)
         if retrieval is None and os.getenv(
             "RETRIEVAL_PORT_ADAPTER_ENABLED", "false"
@@ -272,8 +281,17 @@ def create_app(
                 await redis_client.aclose()
             if database_engine is not None:
                 await database_engine.dispose()
-            if isinstance(answer_generation_adapter, PratikAnswerGenerationAdapter):
-                await answer_generation_adapter.close()
+            close_generation = getattr(answer_generation_adapter, "close", None)
+            if close_generation is not None:
+                try:
+                    if inspect.iscoroutinefunction(close_generation):
+                        await close_generation()
+                    else:
+                        result = await asyncio.to_thread(close_generation)
+                        if inspect.isawaitable(result):
+                            await result
+                except Exception:
+                    logger.exception("Answer-generation adapter failed to close cleanly")
 
     application = FastAPI(
         title="Supreme Court Judgment Query API",

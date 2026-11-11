@@ -28,6 +28,10 @@ class Settings:
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None
+    google_cloud_project: str | None = None
+    google_cloud_location: str | None = None
+    vertex_model_id: str | None = None
+    vertex_generation_timeout_seconds: float = 12.0
     groq_api_key: str | None = None
     groq_model_id: str = "openai/gpt-oss-120b"
     groq_generation_reasoning_effort: str = "medium"
@@ -166,6 +170,17 @@ class Settings:
         oidc_issuer = os.getenv("OIDC_ISSUER") or None
         oidc_audience = os.getenv("OIDC_AUDIENCE") or None
         oidc_jwks_url = os.getenv("OIDC_JWKS_URL") or None
+        google_cloud_project = os.getenv("GOOGLE_CLOUD_PROJECT") or None
+        google_cloud_location = os.getenv("GOOGLE_CLOUD_LOCATION") or None
+        vertex_model_id = os.getenv("VERTEX_MODEL_ID") or None
+        try:
+            vertex_generation_timeout_seconds = float(
+                os.getenv("VERTEX_GENERATION_TIMEOUT_SECONDS", "12")
+            )
+        except ValueError as exc:
+            raise ValueError("VERTEX_GENERATION_TIMEOUT_SECONDS must be numeric.") from exc
+        if not 1 <= vertex_generation_timeout_seconds <= 120:
+            raise ValueError("VERTEX_GENERATION_TIMEOUT_SECONDS must be between 1 and 120.")
         groq_api_key = os.getenv("GROQ_API_KEY") or None
         groq_model_id = os.getenv("GROQ_MODEL_ID", "openai/gpt-oss-120b").strip()
         groq_generation_reasoning_effort = os.getenv(
@@ -189,6 +204,9 @@ class Settings:
                 "AUTH_CHALLENGE_SECRET": auth_challenge_secret,
                 "SMTP_HOST": smtp_host,
                 "SMTP_FROM_EMAIL": smtp_from_email,
+                "GOOGLE_CLOUD_PROJECT": google_cloud_project,
+                "GOOGLE_CLOUD_LOCATION": google_cloud_location,
+                "VERTEX_MODEL_ID": vertex_model_id,
                 "GROQ_API_KEY": groq_api_key,
                 "CORS_ORIGINS": origins,
             }
@@ -238,6 +256,10 @@ class Settings:
             oidc_issuer=oidc_issuer,
             oidc_audience=oidc_audience,
             oidc_jwks_url=oidc_jwks_url,
+            google_cloud_project=google_cloud_project,
+            google_cloud_location=google_cloud_location,
+            vertex_model_id=vertex_model_id,
+            vertex_generation_timeout_seconds=vertex_generation_timeout_seconds,
             groq_api_key=groq_api_key,
             groq_model_id=groq_model_id,
             groq_generation_reasoning_effort=groq_generation_reasoning_effort or "medium",

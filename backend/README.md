@@ -1,6 +1,6 @@
 # Query backend
 
-FastAPI backend for the Supreme Court RAG project. It keeps the versioned `/v1/query` API and provides `/api` routes for the current frontend: email/password auth, email verification and reset, chat, conversation history, and admin reporting. It uses AlloyDB native BM25 retrieval, Groq answer generation, Redis, SMTP, and Cloud Run.
+FastAPI backend for the Supreme Court RAG project. It keeps the versioned `/v1/query` API and provides `/api` routes for the current frontend: email/password auth, email verification and reset, chat, conversation history, and admin reporting. It uses AlloyDB native BM25 retrieval, Vertex AI answer generation with Groq fallback, Redis, SMTP, and Cloud Run.
 
 ## Layout
 
@@ -9,7 +9,7 @@ FastAPI backend for the Supreme Court RAG project. It keeps the versioned `/v1/q
 - `app/auth_service.py`: Argon2id passwords, email codes, hashed opaque sessions, and auth activity logging
 - `app/email.py`: SMTP verification and reset messages
 - `bff/`: public browser-facing proxy that invokes the private API with Cloud Run IAM
-- `app/adapters/`: PostgreSQL BM25 retrieval and Groq answer generation
+- `app/adapters/`: PostgreSQL BM25 retrieval, Vertex AI primary generation, and Groq fallback
 - `app/orchestrator.py`: query flow and citation identity checks
 - `migrations/versions/0001_live_schema_baseline.py`: baseline migration
 - `migrations/versions/0001_live_schema_baseline.sql`: schema-only baseline snapshot
@@ -27,7 +27,7 @@ The API listens at `http://localhost:8080`. Set frontend `VITE_API_URL=http://lo
 
 ### Query data prerequisites
 
-The query API uses AlloyDB's native `pg_textsearch` BM25 operator against `chunks.content` and sends verified passages to Groq for grounded answer generation. It requires the `pg_textsearch` extension and `idx_chunks_bm25` index shown in the supplied AlloyDB schema, plus valid chunk, judgment, source-file, and source-page records. Ingestion is managed separately from this backend repository. Set `DATABASE_URL` to the AlloyDB connection and `GROQ_API_KEY` to enable live queries. Run `alembic upgrade head` inside the API container only for a fresh database; do not run it on the existing AlloyDB schema. Start the frontend from `../frontend` with `npm ci` and `npm run dev`; its `.env` should set `VITE_API_URL=http://localhost:8080/api`. Verification email appears in Mailpit at `http://localhost:8025`.
+The query API uses AlloyDB's native `pg_textsearch` BM25 operator against `chunks.content` and sends verified passages to Vertex AI for grounded answer generation. If Vertex generation fails or returns an invalid response, Groq generates from the same evidence. An empty Vertex answer is treated as an evidence abstention and does not trigger fallback. It requires the `pg_textsearch` extension and `idx_chunks_bm25` index shown in the supplied AlloyDB schema, plus valid chunk, judgment, source-file, and source-page records. Ingestion is managed separately from this backend repository. Set the Google Cloud project, location, and `VERTEX_MODEL_ID`; set `GROQ_API_KEY` to enable the fallback. Run `alembic upgrade head` inside the API container only for a fresh database; do not run it on the existing AlloyDB schema. Start the frontend from `../frontend` with `npm ci` and `npm run dev`; its `.env` should set `VITE_API_URL=http://localhost:8080/api`. Verification email appears in Mailpit at `http://localhost:8025`.
 
 ## Database migration status
 
@@ -35,7 +35,7 @@ The supplied AlloyDB schema dump includes the live judgment, source, page, authe
 
 ## Production configuration
 
-Production requires `DATABASE_URL` pointing to AlloyDB with `postgresql+asyncpg`, `REDIS_URL`, `AUTH_CHALLENGE_SECRET` (at least 32 bytes), `GROQ_API_KEY`, SMTP host/from address, and exact HTTPS `CORS_ORIGINS`. Store database, Redis, Groq, SMTP credentials, and challenge secret in Secret Manager. Configure Cloud Run networking so it can securely reach AlloyDB and Redis, and use a least-privilege runtime service account. The local Compose PostgreSQL image does not include AlloyDB's `pg_textsearch`; use the AlloyDB URL for BM25 query testing.
+Production requires `DATABASE_URL` pointing to AlloyDB with `postgresql+asyncpg`, `REDIS_URL`, `AUTH_CHALLENGE_SECRET` (at least 32 bytes), Vertex project/location/model settings, `GROQ_API_KEY`, SMTP host/from address, and exact HTTPS `CORS_ORIGINS`. Vertex AI is primary and Groq is fallback. Store database, Redis, Groq, SMTP credentials, and challenge secret in Secret Manager. Grant the Cloud Run runtime service account Vertex AI access and Secret Manager access to the Groq key. Configure Cloud Run networking so it can securely reach AlloyDB and Redis, and use a least-privilege runtime service account. The local Compose PostgreSQL image does not include AlloyDB's `pg_textsearch`; use the AlloyDB URL for BM25 query testing.
 
 Cloud Run provides HTTPS and manages its serving certificate. The API listens on HTTP behind the managed proxy and is deployed with public invocation disabled. The separate BFF is the browser-facing service; it is publicly invokable and calls the API with a dedicated service account that alone receives `roles/run.invoker`. The frontend host must route same-origin `/api` requests to the BFF. The Cloud Build pipeline runs Ruff, Bandit, and pip-audit, validates required production settings, then builds, pushes, and deploys the API. Database migrations remain excluded until the existing database has been stamped at the verified baseline.
 
