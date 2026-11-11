@@ -4,7 +4,8 @@ import asyncio
 import logging
 from collections.abc import Sequence
 
-from app.models import ConversationTurn, EvidenceInput, GeneratedAnswer as BackendAnswer
+from app.models import ConversationTurn, EvidenceInput
+from app.models import GeneratedAnswer as BackendAnswer
 from app.ports import AnswerGenerationPort, DependencyRateLimited, DependencyUnavailable
 from app.retrieval.generator import AnswerGenerator
 from app.retrieval.llm import GroqChat
