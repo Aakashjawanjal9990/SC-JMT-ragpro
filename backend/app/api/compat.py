@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import logging
 import re
@@ -130,7 +131,16 @@ def _service(request: Request):
 
 
 def _ip(request: Request) -> str | None:
-    # Do not trust forwarded headers unless a trusted proxy has been configured.
+    trusted_hops = request.app.state.settings.trusted_proxy_hops
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if trusted_hops and forwarded:
+        chain = [item.strip() for item in forwarded.split(",") if item.strip()]
+        client_index = len(chain) - trusted_hops - 1
+        if client_index >= 0:
+            try:
+                return str(ipaddress.ip_address(chain[client_index]))
+            except ValueError:
+                pass
     return request.client.host if request.client else None
 
 

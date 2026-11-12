@@ -165,7 +165,8 @@ class Citation(BaseModel):
     citation: str | None = None
     original_page_numbers: list[int]
     excerpt: str
-    verified: Literal[True] = True
+    # This confirms source identity and exact text, not semantic entailment.
+    provenance_checked: Literal[True] = True
 
 
 class QueryResponse(BaseModel):

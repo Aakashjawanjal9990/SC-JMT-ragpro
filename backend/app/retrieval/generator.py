@@ -125,10 +125,18 @@ class AnswerGenerator:
                 GeneratedAnswer(NOT_FOUND_MESSAGE, answered=False, model=self.chat.model),
                 included,
             )
+        valid_ranks = {int(passage["rank"]) for passage in included}
         answer_lines = [line.strip() for line in reply.splitlines() if line.strip()]
-        if not answer_lines or any(not _CITATION.search(line) for line in answer_lines):
+        if not answer_lines or any(
+            not any(
+                int(rank.strip()) in valid_ranks
+                for group in _CITATION.findall(line)
+                for rank in group.split(",")
+            )
+            for line in answer_lines
+        ):
             return GeneratedAnswer("", answered=False, model=self.chat.model), included
-        answer, cited = clean_citations(reply, {int(passage["rank"]) for passage in included})
+        answer, cited = clean_citations(reply, valid_ranks)
         return (
             GeneratedAnswer(answer, answered=True, cited_ranks=cited, model=self.chat.model),
             included,

@@ -28,6 +28,7 @@ REQUEST_HEADERS = {
     "referer",
     "user-agent",
     "x-csrf-token",
+    "x-forwarded-for",
     "x-request-id",
 }
 RESPONSE_HEADERS = {

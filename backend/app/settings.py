@@ -13,6 +13,7 @@ class Settings:
     cors_origins: tuple[str, ...] = ()
     max_context_chars: int = 80_000
     request_timeout_seconds: float = 60.0
+    trusted_proxy_hops: int = 0
     database_url: str | None = None
     redis_url: str | None = None
     auth_challenge_secret: str | None = None
@@ -92,6 +93,12 @@ class Settings:
             raise ValueError("REQUEST_TIMEOUT_SECONDS must be a number.") from exc
         if not 1 <= request_timeout_seconds <= 120:
             raise ValueError("REQUEST_TIMEOUT_SECONDS must be between 1 and 120.")
+        try:
+            trusted_proxy_hops = int(os.getenv("TRUSTED_PROXY_HOPS", "0"))
+        except ValueError as exc:
+            raise ValueError("TRUSTED_PROXY_HOPS must be an integer.") from exc
+        if not 0 <= trusted_proxy_hops <= 5:
+            raise ValueError("TRUSTED_PROXY_HOPS must be between 0 and 5.")
 
         try:
             rate_limit_requests = int(os.getenv("RATE_LIMIT_REQUESTS", "30"))
@@ -223,6 +230,7 @@ class Settings:
             cors_origins=origins,
             max_context_chars=max_context_chars,
             request_timeout_seconds=request_timeout_seconds,
+            trusted_proxy_hops=trusted_proxy_hops,
             database_url=database_url,
             redis_url=redis_url,
             auth_challenge_secret=auth_challenge_secret,

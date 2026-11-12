@@ -232,8 +232,8 @@ class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
                        c.source_file_uuid::text AS source_pdf_id,
                        c.content AS text,
                        array_agg(sp.page_number ORDER BY sp.page_number) AS pages,
-                       NULL::text AS case_name,
-                       NULL::text AS judgment_title,
+                       j.case_number AS case_name,
+                       j.case_number AS judgment_title,
                        j.judgment_date AS decision_date,
                        j.citation_text AS citation
                 FROM chunks AS c
@@ -252,7 +252,7 @@ class PostgresQueryAdapter(RetrievalPort, SourceRecordPort):
                   AND c.page_start IS NOT NULL
                   AND c.page_end IS NOT NULL
                 GROUP BY c.chunk_uuid, c.judgment_uuid, c.source_file_uuid,
-                         c.content, j.judgment_date, j.citation_text
+                         c.content, j.case_number, j.judgment_date, j.citation_text
                 """
         )
         try:
