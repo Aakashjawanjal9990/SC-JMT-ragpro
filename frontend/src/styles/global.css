@@ -88,7 +88,6 @@ a {
     transform: rotate(360deg);
   }
 }
-
 /* logo */
 .logo {
   display: flex;
@@ -112,7 +111,6 @@ a {
   color: #555;
   white-space: nowrap;
 }
-
 /* buttons */
 .btn {
   display: inline-flex;
@@ -179,7 +177,6 @@ a {
   outline: 2px solid var(--o);
   outline-offset: 2px;
 }
-
 /* forms */
 .field {
   display: flex;
@@ -241,7 +238,6 @@ hr {
   width: 100%;
   margin: 2px 0;
 }
-
 /* watermark (scales) */
 .watermark {
   position: fixed;
@@ -261,14 +257,12 @@ hr {
   padding: 20px 12px;
   margin: 0;
 }
-
 /* auth pages */
 .fields {
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
-
 /* app shell */
 .shell {
   display: grid;
@@ -445,7 +439,6 @@ hr {
   padding: 3px 8px;
   border-radius: 99px;
 }
-
 /* admin */
 .scroll {
   overflow-x: auto;
@@ -464,7 +457,6 @@ td {
 tr:hover td {
   background: #faf7f2;
 }
-
 /* landing */
 .lp {
   position: relative;
@@ -698,7 +690,6 @@ tr:hover td {
 .final .row {
   justify-content: center;
 }
-
 @media (max-width: 860px) {
   .shell {
     grid-template-columns: 1fr;
@@ -732,9 +723,18 @@ tr:hover td {
   .crumb {
     display: none;
   }
-  .lp-hero,
   .lp-nav {
     display: none;
+  }
+  .lp-hero {
+    display: grid;
+    padding: 48px 20px 36px;
+    gap: 24px;
+  }
+  .lp-hero .watermark {
+    width: min(320px, 70vw);
+    right: -40px;
+    bottom: -50px;
   }
   .lp-head {
     padding: 12px 16px;
@@ -747,13 +747,11 @@ tr:hover td {
     scroll-behavior: auto !important;
   }
 }
-
 /* signed-out gate (matches the reference design) */
 .caps {
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
-
 /* knowledge-base metadata card */
 .corpus {
   padding: 22px;
@@ -789,7 +787,6 @@ tr:hover td {
   background: #ece8e1;
   border-radius: 6px;
 }
-
 /* ---------- auth pages (reference theme: beige + cream, serif headings) ---------- */
 .auth {
   --a-left: #f0ece4;
@@ -829,7 +826,6 @@ tr:hover td {
 .auth .logo a {
   color: inherit;
 }
-
 .auth-side {
   position: sticky;
   top: 0;
@@ -896,7 +892,6 @@ tr:hover td {
   font-size: 13px;
   color: var(--a-muted);
 }
-
 .auth-main {
   display: flex;
   flex-direction: column;
@@ -959,7 +954,6 @@ tr:hover td {
   font-size: 13px;
   color: var(--a-muted);
 }
-
 .auth .field {
   gap: 8px;
   font-size: 14px;
@@ -1072,7 +1066,6 @@ input.otp {
   color: var(--mut);
   font-size: 11px;
 }
-
 /* ---------- chat ---------- */
 .chat-area {
   flex: 1;
@@ -1233,7 +1226,6 @@ input.otp {
   opacity: 0.4;
   cursor: not-allowed;
 }
-
 /* ---------- admin ---------- */
 .link-sm {
   font-size: 12px;
@@ -1373,7 +1365,6 @@ input.otp {
 .admin-data table td {
   overflow-wrap: anywhere;
 }
-
 /* Home page layout and chat controls; these overrides do not affect other pages. */
 .home-shell {
   grid-template-areas: 'brand top' 'side main';
@@ -1410,7 +1401,6 @@ input.otp {
 .home-shell .msg {
   overflow-wrap: anywhere;
 }
-
 @media (max-width: 860px) {
   .home-shell {
     grid-template-areas: 'brand' 'top' 'main';
@@ -1427,7 +1417,6 @@ input.otp {
     padding-inline: 16px;
   }
 }
-
 @media (max-width: 520px) {
   .home-shell .shell-top {
     padding: 8px 10px;
@@ -1458,7 +1447,6 @@ input.otp {
     padding-inline: 8px;
   }
 }
-
 @media (max-width: 900px) {
   .auth {
     grid-template-columns: 1fr;
@@ -1479,7 +1467,6 @@ input.otp {
     padding: 0 9px;
   }
 }
-
 /* Delelte n pin */
 .sidebar-row {
   display: flex;
@@ -1487,7 +1474,7 @@ input.otp {
   border-radius: 8px;
 }
 .sidebar-row:hover,
-.sidebar-row.active {
+.sidebar-row\.active {
   background: #1c1c1c;
 }
 .sidebar-row .sidelink {
@@ -1506,7 +1493,7 @@ input.otp {
 }
 .sidebar-row:hover .row-action,
 .sidebar-row:focus-within .row-action,
-.sidebar-row.active .row-action {
+.sidebar-row\.active .row-action {
   opacity: 1;
 }
 .row-action:hover {
@@ -1518,7 +1505,6 @@ input.otp {
     opacity: 1;
   }
 }
-
 /* Archived chats view (add at the end of global.css) */
 .archived {
   max-width: 720px;
@@ -1564,11 +1550,9 @@ input.otp {
   align-items: flex-start;
   gap: 8px;
 }
-
 /* =========================================
    FIXED NYAYA MITRA APPLICATION LAYOUT
 ========================================= */
-
 html,
 body,
 #root {
@@ -1576,23 +1560,19 @@ body,
   height: 100%;
   margin: 0;
 }
-
 .home-shell {
   width: 100%;
   height: 100vh;
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
-
   display: grid;
   grid-template-areas:
     'brand top'
     'side main';
-
   grid-template-columns: 250px minmax(0, 1fr);
   grid-template-rows: 58px minmax(0, 1fr);
 }
-
 /* Logo stays visible */
 .home-shell .shell-brand {
   grid-area: brand;
@@ -1601,7 +1581,6 @@ body,
   background: #f4f4f4;
   min-width: 0;
 }
-
 /* Navigation stays visible */
 .home-shell .shell-top {
   grid-area: top;
@@ -1610,7 +1589,6 @@ body,
   background: #f4f4f4;
   min-width: 0;
 }
-
 /* Sidebar stays visible and scrolls independently */
 .home-shell .sidebar {
   grid-area: side;
@@ -1620,7 +1598,6 @@ body,
   overflow-x: hidden;
   min-width: 0;
 }
-
 /* Only main content scrolls */
 .home-shell .shell-main {
   grid-area: main;
@@ -1631,13 +1608,11 @@ body,
   overscroll-behavior: contain;
   min-width: 0;
 }
-
 /* Chat content */
 .home-shell .shell-content {
   min-height: 0;
   min-width: 0;
 }
-
 /* Mobile and tablet */
 @media (max-width: 860px) {
   .home-shell {
@@ -1645,11 +1620,9 @@ body,
       'brand'
       'top'
       'main';
-
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: 58px auto minmax(0, 1fr);
   }
-
   .home-shell .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
@@ -1660,55 +1633,44 @@ body,
     transition: transform 0.2s ease;
     overflow-y: auto;
   }
-
   .home-shell .sidebar.open {
     transform: translateX(0);
   }
-
   .home-shell .shell-main {
     height: 100%;
     min-height: 0;
   }
-
   .home-shell .shell-content {
     padding-inline: 16px;
   }
 }
-
 /* Small mobile screens */
 @media (max-width: 520px) {
   .home-shell .shell-brand {
     padding-inline: 12px;
   }
-
   .home-shell .shell-top {
     padding: 8px 10px;
   }
-
   .home-shell .shell-content {
     padding: 16px 10px 0;
   }
-
   .home-shell .composer {
     gap: 6px;
     padding-inline: 8px;
   }
-
   .home-shell .composer textarea {
     font-size: 14px;
   }
-
   .home-shell .think {
     padding-inline: 8px;
   }
 }
-
 /* Chat workspace stability: independent sidebar and message scrolling. */
 .home-shell .sidebar {
   overflow: hidden;
   overscroll-behavior: contain;
 }
-
 .home-shell .sidebar-list {
   flex: 1 1 auto;
   min-height: 0;
@@ -1719,28 +1681,22 @@ body,
   scrollbar-color: #555 #000;
   padding-right: 2px;
 }
-
 .home-shell .sidebar-list::-webkit-scrollbar,
 .home-shell .chat::-webkit-scrollbar {
   width: 6px;
 }
-
 .home-shell .sidebar-list::-webkit-scrollbar-track {
   background: #000;
 }
-
 .home-shell .sidebar-list::-webkit-scrollbar-thumb {
   background: #555;
   border-radius: 999px;
 }
-
 .home-shell .sidefoot {
   flex: 0 0 auto;
   margin-top: auto;
 }
-
 /* Chat workspace: independent sidebar scrolling and natural page scrolling */
-
 .home-shell .sidebar {
   display: flex;
   flex-direction: column;
@@ -1748,7 +1704,6 @@ body,
   overflow: hidden;
   overscroll-behavior: contain;
 }
-
 .home-shell .sidebar-list {
   flex: 1 1 0;
   min-height: 0;
@@ -1759,25 +1714,20 @@ body,
   scrollbar-color: #555 #000;
   padding-right: 2px;
 }
-
 .home-shell .sidebar-list::-webkit-scrollbar {
   width: 6px;
 }
-
 .home-shell .sidebar-list::-webkit-scrollbar-track {
   background: #000;
 }
-
 .home-shell .sidebar-list::-webkit-scrollbar-thumb {
   background: #555;
   border-radius: 999px;
 }
-
 .home-shell .sidefoot {
   flex: 0 0 auto;
   margin-top: auto;
 }
-
 /* Main workspace retains its original flex layout */
 .home-shell .shell-main {
   display: flex;
@@ -1788,7 +1738,6 @@ body,
   overflow-x: hidden;
   overscroll-behavior: contain;
 }
-
 .home-shell .shell-content {
   display: flex;
   flex: 1 0 auto;
@@ -1797,7 +1746,6 @@ body,
   min-width: 0;
   overflow: visible;
 }
-
 /* Chat expands naturally; no separate message scrollbar */
 .home-shell .chat-area {
   display: flex;
@@ -1806,7 +1754,6 @@ body,
   min-height: 0;
   overflow: visible;
 }
-
 .home-shell .chat {
   display: flex;
   flex: 0 0 auto;
@@ -1815,7 +1762,6 @@ body,
   overflow: visible;
   gap: 14px;
 }
-
 /* Composer and disclaimer remain in normal layout */
 .home-shell .composer {
   position: sticky;
@@ -1823,32 +1769,270 @@ body,
   flex: 0 0 auto;
   min-width: 0;
 }
-
 .home-shell .foot {
   flex: 0 0 auto;
   margin-top: auto;
   padding: 8px 12px;
   background: var(--bg);
 }
-
 /* Response formatting */
 .home-shell .msg p {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-
 .home-shell .msg.assistant strong {
   font-weight: 700;
   color: inherit;
 }
-
 /* Mobile layout */
 @media (max-width: 860px) {
   .home-shell .sidebar-list {
     min-height: 0;
   }
-
   .home-shell .shell-content {
     padding-bottom: 0;
+  }
+}
+/* Responsive workspace layout — consolidated override */
+.home-shell .shell-main {
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+}
+
+.home-shell .watermark {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: min(360px, 38vw);
+  max-width: 45%;
+  height: auto;
+  object-fit: contain;
+  z-index: 0;
+  opacity: 0.12;
+  pointer-events: none;
+}
+
+.home-shell .shell-content {
+  position: relative;
+  z-index: 1;
+  flex: 1 0 auto;
+  min-width: 0;
+}
+
+.home-shell .foot {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding: 12px 20px;
+  background: var(--bg);
+  line-height: 1.45;
+}
+
+.home-shell .chat-area {
+  min-width: 0;
+}
+
+.home-shell .composer {
+  width: 100%;
+  min-width: 0;
+}
+
+.home-shell .composer textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 860px) {
+  .home-shell {
+    grid-template-areas:
+      'brand'
+      'top'
+      'main';
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 58px 48px minmax(0, 1fr);
+  }
+
+  .home-shell .shell-brand {
+    grid-area: brand;
+    min-width: 0;
+    padding-inline: 14px;
+  }
+
+  .home-shell .shell-top {
+    grid-area: top;
+    min-width: 0;
+    min-height: 48px;
+    padding: 4px 12px;
+    justify-content: flex-end;
+  }
+
+  .home-shell .shell-top > .row {
+    min-width: 0;
+    gap: 8px;
+    flex-wrap: nowrap;
+  }
+
+  .home-shell .sidebar {
+    grid-area: auto;
+  }
+
+  .home-shell .shell-main {
+    grid-area: main;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .home-shell .shell-content {
+    padding: 20px 16px 0;
+  }
+
+  .home-shell .chat-area.empty {
+    min-height: 100%;
+    justify-content: center;
+    padding-bottom: clamp(24px, 6vh, 64px);
+  }
+
+  .home-shell .watermark {
+    width: min(300px, 42vw);
+    max-width: 42%;
+    right: 0;
+    bottom: 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .home-shell {
+    grid-template-rows: 56px 46px minmax(0, 1fr);
+  }
+
+  .home-shell .shell-brand {
+    padding-inline: 10px;
+  }
+
+  .home-shell .shell-top {
+    min-height: 46px;
+    padding: 3px 8px;
+  }
+
+  .home-shell .shell-top > .row {
+    gap: 4px;
+  }
+
+  .home-shell .shell-top .ghost {
+    min-width: 40px;
+    min-height: 40px;
+    justify-content: center;
+    padding: 8px;
+    white-space: nowrap;
+    font-size: 0;
+  }
+
+  .home-shell .shell-top .ghost svg {
+    flex: 0 0 auto;
+  }
+
+  .home-shell .userchip {
+    min-width: 32px;
+    justify-content: center;
+    padding: 3px;
+  }
+
+  .home-shell .userchip .uname {
+    display: none;
+  }
+
+  .home-shell .shell-content {
+    padding: 16px 12px 0;
+  }
+
+  .home-shell .chat-area.empty {
+    padding-bottom: 24px;
+  }
+
+  .home-shell .hero {
+    width: 100%;
+    padding-inline: 4px;
+    margin-bottom: 20px;
+  }
+
+  .home-shell .hero h1 {
+    font-size: clamp(26px, 7vw, 34px);
+    line-height: 1.2;
+  }
+
+  .home-shell .hero .muted {
+    max-width: 34ch;
+    margin-inline: auto;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .home-shell .composer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px;
+    border-radius: 14px;
+  }
+
+  .home-shell .composer textarea {
+    flex: 1 1 0;
+    width: 0;
+    min-width: 0;
+    height: 42px;
+    min-height: 42px;
+    padding: 9px 3px;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+
+  .home-shell .think {
+    flex: 0 0 auto;
+    height: 40px;
+    gap: 5px;
+    padding-inline: 8px;
+    white-space: nowrap;
+  }
+
+  .home-shell .askbtn {
+    flex: 0 0 40px;
+    width: 40px;
+    min-width: 40px;
+    padding: 0;
+  }
+
+  .home-shell .watermark {
+    width: min(220px, 48vw);
+    max-width: 48%;
+    right: 0;
+    bottom: 0;
+  }
+
+  .home-shell .foot {
+    padding: 10px 12px;
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 360px) {
+  .home-shell .shell-top > .row {
+    gap: 2px;
+  }
+
+  .home-shell .shell-top .ghost {
+    min-width: 36px;
+    padding-inline: 6px;
+  }
+
+  .home-shell .think {
+    padding-inline: 6px;
+    font-size: 11px;
+  }
+
+  .home-shell .composer {
+    gap: 4px;
   }
 }

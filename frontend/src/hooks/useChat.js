@@ -40,7 +40,7 @@ export default function useChat() {
 
   const send = useCallback(
     async (question, { think = false } = {}) => {
-      const generation = requestGeneration.current;
+      const generation = ++requestGeneration.current;
 
       setBusy(true);
       setConversationError('');
@@ -49,7 +49,7 @@ export default function useChat() {
       try {
         const res = await api.query(question, conversationId, think);
 
-        if (generation !== requestGeneration.current) return;
+        if (generation !== requestGeneration.current) return null;
 
         if (res.conversationId !== null && res.conversationId !== undefined) {
           setConversationId(res.conversationId);
@@ -78,13 +78,18 @@ export default function useChat() {
             sources: res.sources,
           },
         ]);
+
+        // Return the ID only after a successful API response.
+        return res.conversationId ?? null;
       } catch (err) {
-        if (generation !== requestGeneration.current) return;
+        if (generation !== requestGeneration.current) return null;
 
         setMessages((prev) => [
           ...prev,
           { role: 'assistant', text: err.message, error: true },
         ]);
+
+        return null;
       } finally {
         if (generation === requestGeneration.current) {
           setBusy(false);

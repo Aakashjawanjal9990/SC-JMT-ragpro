@@ -40,11 +40,15 @@ export default function AppShell({
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [archiveError, setArchiveError] = useState('');
 
-  const matches = conversations.filter((c) =>
-    (c.title || '').toLowerCase().includes(query.toLowerCase()),
-  );
+  const normalizedQuery = query.trim().toLocaleLowerCase();
 
+  const matches = conversations.filter((conversation) => {
+    const title = (conversation.title || '').toLocaleLowerCase();
+
+    return title.includes(normalizedQuery);
+  });
   const pinnedList = matches.filter((c) => prefs.pinned.includes(String(c.id)));
 
   const recentList = matches.filter(
@@ -74,10 +78,14 @@ export default function AppShell({
   };
 
   const archiveChat = async (c) => {
+    setArchiveError('');
+
     try {
       await onArchive?.(c.id);
     } catch (err) {
-      window.alert(err.message);
+      setArchiveError(
+        err.message || 'Could not archive this conversation. Please try again.',
+      );
     }
   };
 
@@ -218,6 +226,19 @@ export default function AppShell({
 
           {conversationsStatus === 'ready' && recentList.map(renderRow)}
         </div>
+
+        {archiveError && (
+          <div className="sidehint error" role="alert">
+            <p>{archiveError}</p>
+            <button
+              type="button"
+              className="linkbtn"
+              onClick={() => setArchiveError('')}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
 
         <div className="sidefoot">
           <button

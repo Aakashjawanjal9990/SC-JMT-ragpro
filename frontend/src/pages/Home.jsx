@@ -36,24 +36,41 @@ export default function Home() {
   const { user } = useAuth();
   const chat = useChat();
   const [params, setParams] = useSearchParams();
-  const [initialId] = useState(() => params.get('c'));
+
+  const requestedConversationId = params.get('c');
+
   const openConversation = chat.open;
-  const { conversationId } = chat;
+  const resetChat = chat.reset;
 
-  const loadConversations = chat.loadConversations;
+  const lastRequestedIdRef = useRef(undefined);
+  const activeConversationIdRef = useRef(chat.conversationId);
+  const skipNextOpenRef = useRef(null);
 
-  useEffect(() => {
-    loadConversations();
-  }, [loadConversations]);
-
-  useEffect(() => {
-    if (initialId) openConversation(initialId);
-  }, [initialId, openConversation]);
+  activeConversationIdRef.current = chat.conversationId;
 
   useEffect(() => {
-    if (conversationId === null || conversationId === undefined) return;
-    setParams({ c: String(conversationId) }, { replace: true });
-  }, [conversationId, setParams]);
+    if (requestedConversationId === lastRequestedIdRef.current) {
+      return;
+    }
+
+    lastRequestedIdRef.current = requestedConversationId;
+
+    if (!requestedConversationId) {
+      if (activeConversationIdRef.current !== null) {
+        resetChat();
+      }
+      return;
+    }
+
+    if (skipNextOpenRef.current === requestedConversationId) {
+      skipNextOpenRef.current = null;
+      return;
+    }
+
+    if (String(activeConversationIdRef.current) !== requestedConversationId) {
+      openConversation(requestedConversationId);
+    }
+  }, [requestedConversationId, openConversation, resetChat]);
 
   const [showArchived, setShowArchived] = useState(false);
   const [question, setQuestion] = useState('');
@@ -105,7 +122,7 @@ export default function Home() {
     el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT)}px`;
   }, [question]);
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
 
     const text = question.trim();
@@ -122,7 +139,17 @@ export default function Home() {
     setQuestionError('');
     setInitialDailyState(false);
     setQuestion('');
-    chat.send(text, { think });
+
+    const newConversationId = await chat.send(text, { think });
+
+    if (newConversationId !== null && newConversationId !== undefined) {
+      const nextId = String(newConversationId);
+
+      if (params.get('c') !== nextId) {
+        skipNextOpenRef.current = nextId;
+        setParams({ c: nextId }, { replace: true });
+      }
+    }
   };
 
   const startNewResearch = () => {
@@ -147,7 +174,12 @@ export default function Home() {
 
   const openConversationFromSidebar = (id) => {
     setShowArchived(false);
-    chat.open(id);
+
+    const nextId = String(id);
+
+    if (params.get('c') !== nextId) {
+      setParams({ c: nextId });
+    }
   };
 
   return (
