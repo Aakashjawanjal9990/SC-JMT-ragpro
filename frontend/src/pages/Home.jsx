@@ -39,7 +39,7 @@ export default function Home() {
   const [initialId] = useState(() => params.get('c'));
   const openConversation = chat.open;
   const { conversationId } = chat;
-  
+
   const loadConversations = chat.loadConversations;
 
   useEffect(() => {
