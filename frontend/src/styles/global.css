@@ -253,8 +253,8 @@ hr {
   z-index: 0;
 }
 .foot {
-  position: fixed;
-  z-index: 1;
+  position: relative;
+  z-index: auto;
   text-align: center;
   font-size: 11px;
   color: var(--mut);
