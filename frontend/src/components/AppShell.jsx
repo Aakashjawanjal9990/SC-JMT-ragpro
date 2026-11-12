@@ -183,39 +183,41 @@ export default function AppShell({
           </button>
         )}
 
-        {conversationsStatus === 'ready' && pinnedList.length > 0 && (
-          <>
-            <h4>PINNED</h4>
-            {pinnedList.map(renderRow)}
-          </>
-        )}
+        <div className="sidebar-list">
+          {conversationsStatus === 'ready' && pinnedList.length > 0 && (
+            <>
+              <h4>PINNED</h4>
+              {pinnedList.map(renderRow)}
+            </>
+          )}
 
-        <h4>YOUR RESEARCH</h4>
+          <h4>YOUR RESEARCH</h4>
 
-        {conversationsStatus === 'loading' && (
-          <p className="sidehint" aria-live="polite">
-            Loading research…
-          </p>
-        )}
+          {conversationsStatus === 'loading' && (
+            <p className="sidehint" aria-live="polite">
+              Loading research…
+            </p>
+          )}
 
-        {conversationsStatus === 'error' && (
-          <div className="sidehint" role="alert">
-            <p>{conversationsError || 'Could not load your research.'}</p>
-            <button className="linkbtn" onClick={onRetryConversations}>
-              Try again
-            </button>
-          </div>
-        )}
+          {conversationsStatus === 'error' && (
+            <div className="sidehint" role="alert">
+              <p>{conversationsError || 'Could not load your research.'}</p>
+              <button className="linkbtn" onClick={onRetryConversations}>
+                Try again
+              </button>
+            </div>
+          )}
 
-        {conversationsStatus === 'ready' && matches.length === 0 && (
-          <p className="sidehint">
-            {conversations.length
-              ? 'No matching research.'
-              : 'Start a conversation and revisit your research here.'}
-          </p>
-        )}
+          {conversationsStatus === 'ready' && matches.length === 0 && (
+            <p className="sidehint">
+              {conversations.length
+                ? 'No matching research.'
+                : 'Start a conversation and revisit your research here.'}
+            </p>
+          )}
 
-        {conversationsStatus === 'ready' && recentList.map(renderRow)}
+          {conversationsStatus === 'ready' && recentList.map(renderRow)}
+        </div>
 
         <div className="sidefoot">
           <button

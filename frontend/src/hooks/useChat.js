@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { api } from '../lib/api';
 
 /** Chat state for the Home page: messages, sidebar history, sending. */
@@ -30,15 +30,13 @@ export default function useChat() {
       const data = await api.conversations();
       setConversations(data);
       setConversationsStatus('ready');
+      return data;
     } catch (err) {
       setConversationsError(err.message);
       setConversationsStatus('error');
+      return null;
     }
   }, []);
-
-  useEffect(() => {
-    loadConversations();
-  }, [loadConversations]);
 
   const send = useCallback(
     async (question, { think = false } = {}) => {

@@ -10,7 +10,27 @@ import { displayName, getFirstName } from '../lib/names';
 import { validateQuery } from '../lib/validators';
 
 const MAX_HEIGHT = 140;
+
 const WISH_KEY = 'nm_wish_day';
+
+/**
+ * Render the supported **bold** Markdown syntax as safe React text nodes.
+ * All other response content remains plain text and is escaped by React.
+ *
+ * @param {string} value - Assistant response text.
+ * @returns {React.ReactNode[]} Safe text and strong elements.
+ */
+function renderBoldText(value) {
+  return String(value ?? '')
+    .split(/(\*\*[^*\n]+?\*\*)/g)
+    .map((part, index) => {
+      if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+        return <strong key={index}>{part.slice(2, -2)}</strong>;
+      }
+
+      return part;
+    });
+}
 
 export default function Home() {
   const { user } = useAuth();
@@ -19,6 +39,12 @@ export default function Home() {
   const [initialId] = useState(() => params.get('c'));
   const openConversation = chat.open;
   const { conversationId } = chat;
+  
+  const loadConversations = chat.loadConversations;
+
+  useEffect(() => {
+    loadConversations();
+  }, [loadConversations]);
 
   useEffect(() => {
     if (initialId) openConversation(initialId);
@@ -194,7 +220,11 @@ export default function Home() {
 
             {chat.messages.map((m, i) => (
               <div key={i} className={`msg ${m.role} ${m.error ? 'err' : ''}`}>
-                <p>{m.text}</p>
+                <p>
+                  {m.role === 'assistant' && !m.error
+                    ? renderBoldText(m.text)
+                    : m.text}
+                </p>
                 {m.sources?.map((s, j) => (
                   <span key={`${s.case}-${j}`} className="src">
                     {s.case}
