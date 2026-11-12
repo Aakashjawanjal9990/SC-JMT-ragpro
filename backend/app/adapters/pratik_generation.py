@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 from app.models import ConversationTurn, EvidenceInput
 from app.models import GeneratedAnswer as BackendAnswer
-from app.ports import AnswerGenerationPort, DependencyUnavailable
+from app.ports import AnswerGenerationPort, DependencyRateLimited, DependencyUnavailable
 from app.retrieval.generator import AnswerGenerator
 from app.retrieval.llm import GroqChat
 from app.settings import Settings
@@ -41,7 +41,6 @@ class PratikAnswerGenerationAdapter(AnswerGenerationPort):
         think: bool = False,
         conversation_history: Sequence[ConversationTurn] = (),
     ) -> BackendAnswer:
-        del think, conversation_history
         passages = [
             {
                 "document_id": item.document_id or item.evidence_id,
@@ -54,8 +53,16 @@ class PratikAnswerGenerationAdapter(AnswerGenerationPort):
         ]
         try:
             generated, included = await asyncio.to_thread(
-                self._generator.generate, question, passages
+                self._generator.generate,
+                question,
+                passages,
+                conversation_history=[
+                    {"role": turn.role, "text": turn.text} for turn in conversation_history
+                ],
+                think=think,
             )
+        except DependencyRateLimited:
+            raise
         except Exception as exc:
             logger.error(
                 "query.dependency_failed",
@@ -83,7 +90,11 @@ class PratikAnswerGenerationAdapter(AnswerGenerationPort):
         )
 
     async def healthcheck(self) -> bool:
-        return True
+        try:
+            response = await asyncio.to_thread(self._chat.healthcheck)
+        except Exception:
+            return False
+        return response
 
     async def close(self) -> None:
         await asyncio.to_thread(self._chat.close)

@@ -54,22 +54,23 @@ class RequestIdFilter(logging.Filter):
 
 
 def configure_logging(level: str, environment: str) -> None:
-    app_logger = logging.getLogger("supreme_court_rag")
-    app_logger.setLevel(level)
-    app_logger.propagate = False
-    existing_handler = next(
-        (
-            handler
-            for handler in app_logger.handlers
-            if getattr(handler, "_rag_json_handler", False)
-        ),
-        None,
-    )
-    if existing_handler is not None:
-        existing_handler.setFormatter(JsonFormatter(environment))
-        return
-    handler = logging.StreamHandler()
-    handler._rag_json_handler = True  # type: ignore[attr-defined]
-    handler.setFormatter(JsonFormatter(environment))
-    handler.addFilter(RequestIdFilter())
-    app_logger.addHandler(handler)
+    for name in ("supreme_court_rag", "app"):
+        app_logger = logging.getLogger(name)
+        app_logger.setLevel(level)
+        app_logger.propagate = False
+        existing_handler = next(
+            (
+                handler
+                for handler in app_logger.handlers
+                if getattr(handler, "_rag_json_handler", False)
+            ),
+            None,
+        )
+        if existing_handler is not None:
+            existing_handler.setFormatter(JsonFormatter(environment))
+            continue
+        handler = logging.StreamHandler()
+        handler._rag_json_handler = True  # type: ignore[attr-defined]
+        handler.setFormatter(JsonFormatter(environment))
+        handler.addFilter(RequestIdFilter())
+        app_logger.addHandler(handler)

@@ -165,12 +165,15 @@ async def _proxy(request: Request, path: str = "") -> Response:
 
     try:
         body = await _request_body(request)
-        upstream = await request.app.state.http.request(
+        # Avoid AsyncClient.request(), which merges the shared client's cookie
+        # jar into requests and can leak one visitor's session to another.
+        upstream_request = httpx.Request(
             request.method,
             url,
             headers=headers,
             content=body,
         )
+        upstream = await request.app.state.http.send(upstream_request)
     except HTTPException:
         raise
     except httpx.TimeoutException:

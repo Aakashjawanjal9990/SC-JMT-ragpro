@@ -17,7 +17,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.auth_service import ADMIN_SESSION_HOURS, SESSION_DAYS
 from app.models import ConversationTurn, QueryFilters, QueryOptions, QueryRequest
-from app.ports import AdapterNotConfigured, DependencyUnavailable, UnsupportedQueryFilter
+from app.ports import (
+    AdapterNotConfigured,
+    DependencyRateLimited,
+    DependencyUnavailable,
+    UnsupportedQueryFilter,
+)
 from app.rate_limit import enforce_rate_limit
 from app.retrieval.errors import FilterError, RetrievalFailure, RetrievalTimeoutError
 from app.security import (
@@ -205,8 +210,18 @@ async def register(payload: Registration, request: Request) -> dict[str, Any]:
             ip_address=_ip(request),
             user_agent=request.headers.get("user-agent"),
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError:
+        # Keep registration responses from revealing whether an account exists.
+        return {
+            "verificationRequired": True,
+            "message": "Check your email for a verification code.",
+        }
+    except DependencyUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Email delivery is temporarily unavailable. Please use resend code shortly.",
+            headers={"Retry-After": "30"},
+        ) from exc
     return {"verificationRequired": True, "message": "Check your email for a verification code."}
 
 
@@ -445,20 +460,14 @@ async def chat_query(
         options=QueryOptions(max_sources=payload.max_sources),
     )
     normalized_query = payload.normalized_query or payload.question
-    search_terms = [term.strip() for term in payload.search_terms if term.strip()]
     conversation_history = (
         await _load_conversation_history(request, user, conversation_id)
         if payload.conversation_id is not None
         else []
     )
-    recent_user_questions = [turn.text for turn in conversation_history if turn.role == "user"][-3:]
-    retrieval_query = "\n".join(
-        [
-            *(f"Prior user question: {item}" for item in recent_user_questions),
-            f"Current question: {normalized_query}",
-            *(f"Search term: {term}" for term in search_terms),
-        ]
-    )[:10_000]
+    # History is passed separately to generation for reference resolution.
+    # Retrieval should only search the current standalone query.
+    retrieval_query = normalized_query[:10_000]
     started = datetime.now(UTC)
     try:
         async with asyncio.timeout(request.app.state.request_timeout_seconds):
@@ -512,6 +521,15 @@ async def chat_query(
         )
         raise HTTPException(
             status_code=503, detail="Query dependencies are not configured yet."
+        ) from exc
+    except DependencyRateLimited as exc:
+        await _persist_failed_chat_attempt(
+            request, user, conversation_id, payload.question, started, "dependency_rate_limited"
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="The answer provider is busy. Please retry after the indicated delay.",
+            headers={"Retry-After": str(exc.retry_after)},
         ) from exc
     except DependencyUnavailable as exc:
         await _persist_failed_chat_attempt(
@@ -647,7 +665,7 @@ async def _persist_failed_chat_attempt(
 
 
 def _frontend_sources(citations: list[Any]) -> list[dict[str, Any]]:
-    """Collapse chunk citations into one frontend source per case."""
+    """Collapse chunk citations by judgment while preserving distinct sources."""
     grouped: dict[str, dict[str, Any]] = {}
     for citation in citations:
         case_name = (
@@ -656,7 +674,7 @@ def _frontend_sources(citations: list[Any]) -> list[dict[str, Any]]:
             or citation.citation
             or "Supreme Court judgment"
         )
-        key = case_name.strip().casefold()
+        key = citation.document_id
         source = grouped.setdefault(
             key,
             {
@@ -666,15 +684,26 @@ def _frontend_sources(citations: list[Any]) -> list[dict[str, Any]]:
                 "pages": set(),
                 "citation": citation.citation,
                 "excerpt": citation.excerpt,
+                "excerpts": [],
+                "citationIds": [],
                 "judgmentId": citation.document_id,
             },
         )
         source["pages"].update(citation.original_page_numbers)
+        source["citationIds"].append(citation.citation_id)
+        source["excerpts"].append(
+            {
+                "citationId": citation.citation_id,
+                "pages": citation.original_page_numbers,
+                "text": citation.excerpt,
+            }
+        )
 
     result: list[dict[str, Any]] = []
-    for source in grouped.values():
+    for index, source in enumerate(grouped.values(), start=1):
         pages = sorted(source.pop("pages"))
         source["pages"] = pages
+        source["number"] = index
         source["page"] = (
             "-" if not pages else str(pages[0]) if len(pages) == 1 else f"{pages[0]}-{pages[-1]}"
         )
@@ -824,23 +853,30 @@ async def get_conversation(
     engine = request.app.state.database_engine
     if engine is None or not user.user_id:
         raise HTTPException(status_code=503, detail="Conversation history is unavailable.")
-    async with engine.connect() as connection:
-        rows = (
-            (
-                await connection.execute(
-                    text(
-                        """SELECT query_text, response_text, retrieved_chunks, created_at
-               FROM query_runs
-               WHERE user_uuid = :user_id AND metadata->>'conversation_id' = :conversation_id
-                 AND response_text IS NOT NULL
-               ORDER BY created_at"""
-                    ),
-                    {"user_id": UUID(user.user_id), "conversation_id": str(conversation_id)},
+    try:
+        async with engine.connect() as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        text(
+                            """SELECT query_text, response_text, retrieved_chunks, created_at
+                   FROM query_runs
+                   WHERE user_uuid = :user_id AND metadata->>'conversation_id' = :conversation_id
+                     AND response_text IS NOT NULL
+                   ORDER BY created_at"""
+                        ),
+                        {"user_id": UUID(user.user_id), "conversation_id": str(conversation_id)},
+                    )
                 )
+                .mappings()
+                .all()
             )
-            .mappings()
-            .all()
-        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Conversation history is temporarily unavailable.",
+            headers={"Retry-After": "5"},
+        ) from exc
     if not rows:
         raise HTTPException(status_code=404, detail="Conversation not found.")
     messages: list[dict[str, Any]] = []
