@@ -4,3 +4,4 @@ numpy>=2.0
 sqlalchemy>=2.0,<3
 pg8000>=1.31
 cloud-sql-python-connector[pg8000]>=1.18
+google-genai>=1.0

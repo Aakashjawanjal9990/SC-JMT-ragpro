@@ -30,6 +30,13 @@ class Settings:
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None
+    google_cloud_project: str | None = None
+    google_cloud_location: str | None = None
+    vertex_model_id: str | None = None
+    answer_generation_provider: str = "vertex"
+    answer_generation_fallback: str = "groq"
+    gemini_api_key: str | None = None
+    gemini_generation_timeout_seconds: float = 8.0
     groq_api_key: str | None = None
     groq_model_id: str = "openai/gpt-oss-120b"
     groq_generation_reasoning_effort: str = "medium"
@@ -179,6 +186,16 @@ class Settings:
         oidc_issuer = os.getenv("OIDC_ISSUER") or None
         oidc_audience = os.getenv("OIDC_AUDIENCE") or None
         oidc_jwks_url = os.getenv("OIDC_JWKS_URL") or None
+        google_cloud_project = os.getenv("GOOGLE_CLOUD_PROJECT") or None
+        google_cloud_location = os.getenv("GOOGLE_CLOUD_LOCATION") or None
+        vertex_model_id = os.getenv("VERTEX_MODEL_ID") or None
+        answer_generation_provider = os.getenv(
+            "ANSWER_GENERATION_PROVIDER", "vertex"
+        ).strip().lower()
+        answer_generation_fallback = os.getenv(
+            "ANSWER_GENERATION_FALLBACK", "groq"
+        ).strip().lower() or "none"
+        gemini_api_key = os.getenv("GEMINI_API_KEY") or None
         groq_api_key = os.getenv("GROQ_API_KEY") or None
         groq_model_id = os.getenv("GROQ_MODEL_ID", "openai/gpt-oss-120b").strip()
         groq_generation_reasoning_effort = os.getenv(
@@ -191,8 +208,19 @@ class Settings:
             )
             groq_max_passage_chars = int(os.getenv("GROQ_MAX_PASSAGE_CHARS", "6000"))
             groq_max_context_chars = int(os.getenv("GROQ_MAX_CONTEXT_CHARS", "48000"))
+            gemini_generation_timeout_seconds = float(
+                os.getenv("GEMINI_GENERATION_TIMEOUT_SECONDS", "8")
+            )
         except ValueError as exc:
-            raise ValueError("Groq generation limits must be numeric.") from exc
+            raise ValueError("Answer generation limits must be numeric.") from exc
+        if answer_generation_provider not in {"vertex", "groq"}:
+            raise ValueError("ANSWER_GENERATION_PROVIDER must be 'vertex' or 'groq'.")
+        if answer_generation_fallback not in {"none", "groq"}:
+            raise ValueError("ANSWER_GENERATION_FALLBACK must be 'none' or 'groq'.")
+        if answer_generation_fallback == "groq" and answer_generation_provider == "groq":
+            raise ValueError("ANSWER_GENERATION_FALLBACK=groq requires a non-Groq primary.")
+        if not 1 <= gemini_generation_timeout_seconds <= 120:
+            raise ValueError("GEMINI_GENERATION_TIMEOUT_SECONDS must be between 1 and 120.")
         if not groq_model_id or len(groq_model_id) > 128:
             raise ValueError("GROQ_MODEL_ID must contain between 1 and 128 characters.")
         if environment.lower() in {"prod", "production"}:
@@ -253,6 +281,13 @@ class Settings:
             oidc_issuer=oidc_issuer,
             oidc_audience=oidc_audience,
             oidc_jwks_url=oidc_jwks_url,
+            google_cloud_project=google_cloud_project,
+            google_cloud_location=google_cloud_location,
+            vertex_model_id=vertex_model_id,
+            answer_generation_provider=answer_generation_provider,
+            answer_generation_fallback=answer_generation_fallback,
+            gemini_api_key=gemini_api_key,
+            gemini_generation_timeout_seconds=gemini_generation_timeout_seconds,
             groq_api_key=groq_api_key,
             groq_model_id=groq_model_id,
             groq_generation_reasoning_effort=groq_generation_reasoning_effort or "medium",
