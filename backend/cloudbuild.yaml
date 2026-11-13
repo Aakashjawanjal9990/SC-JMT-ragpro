@@ -25,6 +25,10 @@ steps:
         require_value _CORS_ORIGINS "${_CORS_ORIGINS}"
         require_value _SMTP_HOST "${_SMTP_HOST}"
         require_value _SMTP_FROM_EMAIL "${_SMTP_FROM_EMAIL}"
+        case "${_ADMIN_MFA_REQUIRED}" in
+          true|false) ;;
+          *) echo "_ADMIN_MFA_REQUIRED must be true or false" >&2; exit 1 ;;
+        esac
         case "${_CORS_ORIGINS}" in https://*) ;; *) echo "_CORS_ORIGINS must use HTTPS" >&2; exit 1 ;; esac
 
   - id: build-container

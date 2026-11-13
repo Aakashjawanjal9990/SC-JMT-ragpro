@@ -39,12 +39,13 @@ Admin MFA uses six-digit TOTP codes from an authenticator app. The backend encry
 
 The backend adds these endpoints (admin session plus the usual trusted-origin and CSRF checks):
 
+- `GET /api/admin/mfa/status` returns `{ "enabled": true, "required": false }` without revealing the secret.
 - `POST /api/admin/mfa/setup` with `{ "password": "...", "currentCode": "123456" }` starts enrollment and returns `{ "secret": "...", "otpauthUri": "..." }`. `currentCode` is required when replacing an existing authenticator. Display the secret/QR only during enrollment and do not log or persist it in the browser.
 - `POST /api/admin/mfa/enable` with `{ "code": "123456" }` verifies the authenticator and enables MFA.
 - `POST /api/admin/login` accepts `{ "username": "...", "password": "...", "mfaCode": "123456" }` for enrolled admins.
 - `POST /api/admin/mfa/disable` with `{ "password": "...", "code": "123456" }` disables MFA only while the policy is optional. The backend rejects disabling when MFA is required.
 
-The current frontend has no MFA enrollment or login-code UI, so these backend endpoints need corresponding frontend integration before admins can use MFA through the app. Keep `ADMIN_MFA_REQUIRED=false` while the UI is added and every administrator enrolls. Then set Cloud Build substitution `_ADMIN_MFA_REQUIRED=true` and deploy; unenrolled admins cannot sign in after enforcement is enabled. Cloud Build defaults this substitution to `false`.
+The current frontend has no MFA enrollment or login-code UI, so these backend endpoints need corresponding frontend integration before admins can use MFA through the app. Keep `ADMIN_MFA_REQUIRED=false` while the UI is added and every administrator enrolls. Enabling MFA revokes that admin's active sessions; they must sign in again with a code. Then set Cloud Build substitution `_ADMIN_MFA_REQUIRED=true` and deploy; unenrolled admins cannot sign in after enforcement is enabled, and sessions created without MFA verification will be denied on admin routes. Cloud Build defaults this substitution to `false`.
 
 Cloud Build intentionally does not modify the existing AlloyDB schema. Before deploying the MFA code, have an authorized database operator verify the columns are absent and apply:
 
@@ -54,6 +55,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_mfa_pending_secret_ciphertext t
 ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_mfa_pending_expires_at timestamptz;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_mfa_enabled_at timestamptz;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_mfa_last_counter bigint NOT NULL DEFAULT -1;
+ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS admin_mfa_verified boolean NOT NULL DEFAULT false;
 ```
 
 The Alembic migration `0003_admin_totp_mfa` contains the equivalent change for databases managed through the migration chain. Do not run it on the existing AlloyDB database unless its migration history has first been reconciled with the live schema.

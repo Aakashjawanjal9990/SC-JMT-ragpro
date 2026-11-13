@@ -20,6 +20,7 @@ class AuthenticatedUser:
     role: str = "user"
     session_id: str | None = None
     token_hash: str | None = None
+    admin_mfa_verified: bool = False
 
 
 class OIDCVerifier:
@@ -154,7 +155,11 @@ async def require_admin_user(
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> AuthenticatedUser:
     """Require an authenticated application administrator."""
-    del request
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Administrator access is required.")
+    if request.app.state.settings.admin_mfa_required and not user.admin_mfa_verified:
+        raise HTTPException(
+            status_code=403,
+            detail="Sign in again with an authenticator code to access administrator features.",
+        )
     return user

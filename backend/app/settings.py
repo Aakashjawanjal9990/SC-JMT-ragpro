@@ -136,9 +136,11 @@ class Settings:
         database_url = os.getenv("DATABASE_URL") or None
         redis_url = os.getenv("REDIS_URL") or None
         auth_challenge_secret = os.getenv("AUTH_CHALLENGE_SECRET") or None
-        admin_mfa_required = os.getenv("ADMIN_MFA_REQUIRED", "false").strip().lower() in {
-            "1", "true", "yes", "on"
-        }
+        raw_admin_mfa_required = os.getenv("ADMIN_MFA_REQUIRED", "false").strip().lower()
+        valid_boolean_values = {"0", "1", "false", "true", "no", "yes", "off", "on"}
+        if raw_admin_mfa_required not in valid_boolean_values:
+            raise ValueError("ADMIN_MFA_REQUIRED must be a boolean value.")
+        admin_mfa_required = raw_admin_mfa_required in {"1", "true", "yes", "on"}
         session_cookie_name = os.getenv("SESSION_COOKIE_NAME", "nm_session").strip()
         admin_session_cookie_name = os.getenv(
             "ADMIN_SESSION_COOKIE_NAME", "nm_admin_session"

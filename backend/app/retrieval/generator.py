@@ -30,6 +30,11 @@ personal legal advice."""
 
 _CITATION = re.compile(r"\[P(\d+(?:\s*,\s*\d+)*)\]")
 _LENTICULAR_CITATION = re.compile(r"【\s*(\d+(?:\s*,\s*\d+)*)(?:[^】]*)】")
+_ABBREVIATION = re.compile(
+    r"\b(?:v|vs|no|nos|s\.c\.r|s\.c|a\.i\.r|scc|air|j|jj|art|sec|dr|mr|mrs|ltd|inc|e\.g|i\.e|cf)\.",
+    re.IGNORECASE,
+)
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\u201c\"'(\[])")
 
 
 @dataclass
@@ -75,6 +80,22 @@ def clean_citations(answer: str, valid_ranks: set[int]) -> tuple[str, list[int]]
     cleaned = _CITATION.sub(keep, _LENTICULAR_CITATION.sub(r" [P\1]", answer))
     cleaned = re.sub(r"[ \t]+([.,;:])", r"\1", cleaned)
     return re.sub(r"[ \t]{2,}", " ", cleaned).strip(), cited
+
+
+def _all_sentences_cited(line: str, valid_ranks: set[int]) -> bool:
+    protected = _ABBREVIATION.sub(lambda match: match.group(0).replace(".", "\x00"), line)
+    sentences = [
+        part.replace("\x00", ".").strip() for part in _SENTENCE_BOUNDARY.split(protected)
+    ]
+    return all(
+        any(
+            int(rank.strip()) in valid_ranks
+            for group in _CITATION.findall(sentence)
+            for rank in group.split(",")
+        )
+        for sentence in sentences
+        if sentence
+    )
 
 
 class AnswerGenerator:
@@ -128,12 +149,7 @@ class AnswerGenerator:
         valid_ranks = {int(passage["rank"]) for passage in included}
         answer_lines = [line.strip() for line in reply.splitlines() if line.strip()]
         if not answer_lines or any(
-            not any(
-                int(rank.strip()) in valid_ranks
-                for group in _CITATION.findall(line)
-                for rank in group.split(",")
-            )
-            for line in answer_lines
+            not _all_sentences_cited(line, valid_ranks) for line in answer_lines
         ):
             return GeneratedAnswer("", answered=False, model=self.chat.model), included
         answer, cited = clean_citations(reply, valid_ranks)

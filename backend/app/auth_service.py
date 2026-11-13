@@ -1,6 +1,7 @@
 """Password, email-code, and opaque session-token operations."""
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -14,6 +15,7 @@ from uuid import UUID, uuid4
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from redis.asyncio import Redis
 from sqlalchemy import text
@@ -31,6 +33,11 @@ SESSION_DAYS = 30
 ADMIN_SESSION_HOURS = 8
 TOTP_PERIOD_SECONDS = 30
 logger = logging.getLogger("supreme_court_rag.security")
+
+
+class InvalidMfaSecret(RuntimeError):
+    """Stored MFA ciphertext cannot be authenticated or decoded safely."""
+
 
 _CONSUME_CHALLENGE_SCRIPT = """
 local raw = redis.call('GET', KEYS[1])
@@ -98,7 +105,10 @@ class AuthService:
                 raise PermissionError("Current authenticator code is incorrect.")
         secret = base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
         nonce = secrets.token_bytes(12)
-        encrypted = nonce + self._totp_cipher.encrypt(nonce, secret.encode("ascii"), user_id.encode())
+        encrypted_secret = self._totp_cipher.encrypt(
+            nonce, secret.encode("ascii"), user_id.encode()
+        )
+        encrypted = nonce + encrypted_secret
         async with self._engine.begin() as connection:
             result = await connection.execute(
                 text(
@@ -107,7 +117,10 @@ class AuthService:
                        WHERE user_uuid = :user_id AND role = 'admin'
                          AND account_status = 'active'"""
                 ),
-                {"secret": base64.urlsafe_b64encode(encrypted).decode("ascii"), "user_id": UUID(user_id)},
+                {
+                    "secret": base64.urlsafe_b64encode(encrypted).decode("ascii"),
+                    "user_id": UUID(user_id),
+                },
             )
             if result.rowcount != 1:
                 raise ValueError("Active administrator account not found.")
@@ -118,30 +131,55 @@ class AuthService:
         )
         return {"secret": secret, "otpauthUri": uri}
 
-    async def confirm_admin_mfa_setup(self, user_id: str, code: str) -> None:
+    async def admin_mfa_status(self, user_id: str) -> dict[str, bool]:
         async with self._engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    text(
+                        """SELECT admin_mfa_enabled_at
+                           FROM users WHERE user_uuid = :user_id
+                             AND role = 'admin' AND account_status = 'active'"""
+                    ),
+                    {"user_id": UUID(user_id)},
+                )
+            ).mappings().one_or_none()
+        if row is None:
+            raise ValueError("Active administrator account not found.")
+        return {
+            "enabled": row["admin_mfa_enabled_at"] is not None,
+            "required": self._settings.admin_mfa_required,
+        }
+
+    async def confirm_admin_mfa_setup(self, user_id: str, code: str) -> None:
+        async with self._engine.begin() as connection:
             row = (
                 await connection.execute(
                     text(
                         """SELECT admin_mfa_pending_secret_ciphertext,
                                   admin_mfa_pending_expires_at
-                           FROM users WHERE user_uuid = :user_id AND role = 'admin'"""
+                           FROM users WHERE user_uuid = :user_id AND role = 'admin'
+                           FOR UPDATE"""
                     ),
                     {"user_id": UUID(user_id)},
                 )
             ).mappings().one_or_none()
-        if not row or not row["admin_mfa_pending_secret_ciphertext"]:
-            raise ValueError("Start MFA setup before confirming it.")
-        if not row["admin_mfa_pending_expires_at"] or row["admin_mfa_pending_expires_at"] < datetime.now(UTC):
-            raise ValueError("MFA setup expired. Start setup again.")
-        secret = self._decrypt_totp_secret(row["admin_mfa_pending_secret_ciphertext"], user_id)
-        counter = self._matching_totp_counter(secret, code)
-        if counter is None:
-            raise ValueError("Authenticator code is invalid or expired.")
-        async with self._engine.begin() as connection:
+            if not row or not row["admin_mfa_pending_secret_ciphertext"]:
+                raise ValueError("Start MFA setup before confirming it.")
+            if (
+                not row["admin_mfa_pending_expires_at"]
+                or row["admin_mfa_pending_expires_at"] < datetime.now(UTC)
+            ):
+                raise ValueError("MFA setup expired. Start setup again.")
+            secret = self._decrypt_totp_secret(
+                row["admin_mfa_pending_secret_ciphertext"], user_id
+            )
+            counter = self._matching_totp_counter(secret, code)
+            if counter is None:
+                raise ValueError("Authenticator code is invalid or expired.")
             result = await connection.execute(
                 text(
-                    """UPDATE users SET admin_mfa_secret_ciphertext = admin_mfa_pending_secret_ciphertext,
+                    """UPDATE users SET admin_mfa_secret_ciphertext =
+                              admin_mfa_pending_secret_ciphertext,
                               admin_mfa_enabled_at = now(), admin_mfa_last_counter = :counter,
                               admin_mfa_pending_secret_ciphertext = NULL,
                               admin_mfa_pending_expires_at = NULL, updated_at = now()
@@ -152,6 +190,16 @@ class AuthService:
             )
             if result.rowcount != 1:
                 raise ValueError("MFA setup expired. Start setup again.")
+            await connection.execute(
+                text(
+                    """UPDATE user_sessions SET status = 'REVOKED', logout_at = now()
+                       WHERE user_uuid = :user_id AND status = 'ACTIVE'"""
+                ),
+                {"user_id": UUID(user_id)},
+            )
+        await self._record_admin_mfa_activity(
+            UUID(user_id), "ADMIN_MFA_ENABLED", "Administrator enabled MFA"
+        )
 
     async def disable_admin_mfa(self, user_id: str, password: str, code: str) -> None:
         if self._settings.admin_mfa_required:
@@ -170,10 +218,15 @@ class AuthService:
                 text(
                     """UPDATE users SET admin_mfa_secret_ciphertext = NULL,
                               admin_mfa_enabled_at = NULL, admin_mfa_last_counter = -1,
+                              admin_mfa_pending_secret_ciphertext = NULL,
+                              admin_mfa_pending_expires_at = NULL,
                               updated_at = now() WHERE user_uuid = :user_id AND role = 'admin'"""
                 ),
                 {"user_id": UUID(user_id)},
             )
+        await self._record_admin_mfa_activity(
+            UUID(user_id), "ADMIN_MFA_DISABLED", "Administrator disabled MFA"
+        )
 
     @staticmethod
     def _totp_code(secret: str, counter: int) -> str:
@@ -194,8 +247,15 @@ class AuthService:
         return None
 
     def _decrypt_totp_secret(self, ciphertext: str, user_id: str) -> str:
-        raw = base64.urlsafe_b64decode(ciphertext.encode("ascii"))
-        return self._totp_cipher.decrypt(raw[:12], raw[12:], user_id.encode()).decode("ascii")
+        try:
+            raw = base64.b64decode(ciphertext.encode("ascii"), altchars=b"-_", validate=True)
+            if len(raw) < 12 + 16:
+                raise ValueError("Ciphertext is too short.")
+            return self._totp_cipher.decrypt(
+                raw[:12], raw[12:], user_id.encode("ascii")
+            ).decode("ascii")
+        except (binascii.Error, InvalidTag, UnicodeDecodeError, TypeError, ValueError) as exc:
+            raise InvalidMfaSecret("Stored MFA secret is invalid.") from exc
 
     async def _consume_admin_totp_counter(self, user_id: UUID, counter: int) -> bool:
         async with self._engine.begin() as connection:
@@ -343,12 +403,43 @@ class AuthService:
                 user_id=UUID(str(result["user_uuid"])),
             )
             raise PermissionError("Admin credentials are incorrect.")
+        if admin and (
+            (result["admin_mfa_enabled_at"] is not None)
+            != bool(result["admin_mfa_secret_ciphertext"])
+        ):
+            await self._log_auth_failure(
+                "admin_login_mfa_state_invalid",
+                normalized_email,
+                ip_address,
+                user_agent,
+                user_id=UUID(str(result["user_uuid"])),
+            )
+            raise PermissionError("Admin credentials or authenticator code are incorrect.")
         if admin and self._settings.admin_mfa_required and result["admin_mfa_enabled_at"] is None:
+            await self._log_auth_failure(
+                "admin_login_mfa_enrollment_required",
+                normalized_email,
+                ip_address,
+                user_agent,
+                user_id=UUID(str(result["user_uuid"])),
+            )
             raise PermissionError("Admin MFA enrollment is required before signing in.")
         if admin and result["admin_mfa_enabled_at"] is not None:
-            secret = self._decrypt_totp_secret(
-                result["admin_mfa_secret_ciphertext"], str(result["user_uuid"])
-            )
+            try:
+                secret = self._decrypt_totp_secret(
+                    result["admin_mfa_secret_ciphertext"], str(result["user_uuid"])
+                )
+            except InvalidMfaSecret as exc:
+                await self._log_auth_failure(
+                    "admin_mfa_secret_invalid",
+                    normalized_email,
+                    ip_address,
+                    user_agent,
+                    user_id=UUID(str(result["user_uuid"])),
+                )
+                raise PermissionError(
+                    "Admin credentials or authenticator code are incorrect."
+                ) from exc
             counter = self._matching_totp_counter(secret, mfa_code or "")
             if counter is None or not await self._consume_admin_totp_counter(
                 UUID(str(result["user_uuid"])), counter
@@ -361,6 +452,9 @@ class AuthService:
                     user_id=UUID(str(result["user_uuid"])),
                 )
                 raise PermissionError("Admin credentials or authenticator code are incorrect.")
+            admin_mfa_verified = True
+        else:
+            admin_mfa_verified = False
         if not admin and result["role"] == "admin":
             # A regular login would otherwise grant admin APIs a 30-day session.
             await self._log_auth_failure(
@@ -379,7 +473,13 @@ class AuthService:
                 ),
                 {"id": result["user_uuid"]},
             )
-        token, user = await self._create_session(result, ip_address, user_agent, admin=admin)
+        token, user = await self._create_session(
+            result,
+            ip_address,
+            user_agent,
+            admin=admin,
+            admin_mfa_verified=admin_mfa_verified,
+        )
         await self._record_activity(
             UUID(str(result["user_uuid"])),
             UUID(user.session_id),
@@ -433,7 +533,9 @@ class AuthService:
             result = await connection.execute(
                 text(
                     """SELECT u.user_uuid, u.email, u.full_name, u.role,
-                              s.session_uuid
+                              s.session_uuid,
+                              (s.admin_mfa_verified AND u.admin_mfa_enabled_at IS NOT NULL)
+                                  AS admin_mfa_verified
                        FROM user_sessions AS s
                        JOIN users AS u ON u.user_uuid = s.user_uuid
                        WHERE s.session_token_hash = :token_hash
@@ -460,6 +562,7 @@ class AuthService:
             role=row["role"],
             session_id=str(row["session_uuid"]),
             token_hash=token_hash,
+            admin_mfa_verified=bool(row["admin_mfa_verified"]),
         )
 
     async def logout(self, token: str) -> None:
@@ -504,6 +607,7 @@ class AuthService:
         user_agent: str | None,
         *,
         admin: bool,
+        admin_mfa_verified: bool = False,
     ) -> tuple[str, AuthenticatedUser]:
         token = secrets.token_urlsafe(32)
         session_id = uuid4()
@@ -516,10 +620,10 @@ class AuthService:
                     """INSERT INTO user_sessions (
                            session_uuid, user_uuid, session_token_hash, login_at,
                            last_activity_at, expires_at,
-                           ip_address, user_agent, status
+                           ip_address, user_agent, status, admin_mfa_verified
                        ) VALUES (
                            :session_id, :user_id, :token_hash, now(), now(), :expires_at,
-                           CAST(:ip_address AS inet), :user_agent, 'ACTIVE'
+                           CAST(:ip_address AS inet), :user_agent, 'ACTIVE', :mfa_verified
                        )"""
                 ),
                 {
@@ -529,6 +633,7 @@ class AuthService:
                     "expires_at": expires_at,
                     "ip_address": ip_address,
                     "user_agent": (user_agent or "")[:512],
+                    "mfa_verified": admin_mfa_verified,
                 },
             )
         authenticated = AuthenticatedUser(
@@ -539,6 +644,7 @@ class AuthService:
             role=user["role"],
             session_id=str(session_id),
             token_hash=self._token_hash(token),
+            admin_mfa_verified=admin_mfa_verified,
         )
         return token, authenticated
 
@@ -697,6 +803,17 @@ class AuthService:
                     "user_agent": (user_agent or "")[:512],
                     "metadata": json.dumps(metadata or {}),
                 },
+            )
+
+    async def _record_admin_mfa_activity(
+        self, user_id: UUID, event_type: str, action: str
+    ) -> None:
+        try:
+            await self._record_activity(user_id, None, event_type, action, None, None)
+        except Exception:
+            logger.exception(
+                "security.admin_mfa_activity_write_failed",
+                extra={"security_event": event_type, "user_id": str(user_id)},
             )
 
     def _verify_password(self, stored_hash: str, password: str) -> bool:

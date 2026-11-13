@@ -14,9 +14,13 @@ def upgrade() -> None:
     op.execute("ALTER TABLE users ADD COLUMN admin_mfa_pending_expires_at timestamptz")
     op.execute("ALTER TABLE users ADD COLUMN admin_mfa_enabled_at timestamptz")
     op.execute("ALTER TABLE users ADD COLUMN admin_mfa_last_counter bigint NOT NULL DEFAULT -1")
+    op.execute(
+        "ALTER TABLE user_sessions ADD COLUMN admin_mfa_verified boolean NOT NULL DEFAULT false"
+    )
 
 
 def downgrade() -> None:
+    op.execute("ALTER TABLE user_sessions DROP COLUMN admin_mfa_verified")
     op.execute("ALTER TABLE users DROP COLUMN admin_mfa_last_counter")
     op.execute("ALTER TABLE users DROP COLUMN admin_mfa_enabled_at")
     op.execute("ALTER TABLE users DROP COLUMN admin_mfa_pending_expires_at")

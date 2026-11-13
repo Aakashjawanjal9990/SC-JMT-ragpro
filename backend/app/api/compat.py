@@ -16,7 +16,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, field
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.auth_service import ADMIN_SESSION_HOURS, SESSION_DAYS
+from app.auth_service import ADMIN_SESSION_HOURS, SESSION_DAYS, InvalidMfaSecret
 from app.models import ConversationTurn, QueryFilters, QueryOptions, QueryRequest
 from app.ports import (
     AdapterNotConfigured,
@@ -35,6 +35,10 @@ from app.security import (
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_trusted_origin)])
 logger = logging.getLogger(__name__)
+_CONTEXTUAL_FOLLOWUP = re.compile(
+    r"\b(?:it|they|them|this|that|these|those|same|such|there|what about|how about)\b",
+    re.IGNORECASE,
+)
 
 
 class Credentials(BaseModel):
@@ -376,6 +380,7 @@ async def start_admin_mfa_setup(
     response: Response,
     user: AuthenticatedUser = Depends(require_admin_user),
 ) -> dict[str, str]:
+    await _auth_rate_limit(request, user.user_id)
     if not user.user_id:
         raise HTTPException(status_code=401, detail="An app admin session is required.")
     try:
@@ -386,23 +391,62 @@ async def start_admin_mfa_setup(
         )
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except InvalidMfaSecret as exc:
+        raise HTTPException(
+            status_code=503, detail="MFA setup is temporarily unavailable."
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503, detail="MFA setup is temporarily unavailable."
+        ) from exc
+
+
+@router.get("/admin/mfa/status")
+async def admin_mfa_status(
+    request: Request,
+    user: AuthenticatedUser = Depends(require_admin_user),
+) -> dict[str, bool]:
+    if not user.user_id:
+        raise HTTPException(status_code=401, detail="An app admin session is required.")
+    try:
+        return await _service(request).admin_mfa_status(user.user_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404, detail="Active administrator account not found."
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503, detail="MFA status is temporarily unavailable."
+        ) from exc
 
 
 @router.post("/admin/mfa/enable", status_code=status.HTTP_204_NO_CONTENT)
 async def enable_admin_mfa(
     payload: AdminMfaCode,
     request: Request,
+    response: Response,
     user: AuthenticatedUser = Depends(require_admin_user),
 ) -> Response:
+    await _auth_rate_limit(request, user.user_id)
     if not user.user_id:
         raise HTTPException(status_code=401, detail="An app admin session is required.")
     try:
         await _service(request).confirm_admin_mfa_setup(user.user_id, payload.code)
+        _clear_session_cookie(response, request, admin=True)
+    except InvalidMfaSecret as exc:
+        raise HTTPException(
+            status_code=503, detail="MFA enrollment is temporarily unavailable."
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503, detail="MFA enrollment is temporarily unavailable."
+        ) from exc
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 
 @router.post("/admin/mfa/disable", status_code=status.HTTP_204_NO_CONTENT)
@@ -411,14 +455,25 @@ async def disable_admin_mfa(
     request: Request,
     user: AuthenticatedUser = Depends(require_admin_user),
 ) -> Response:
+    await _auth_rate_limit(request, user.user_id)
     if not user.user_id:
         raise HTTPException(status_code=401, detail="An app admin session is required.")
+    if request.app.state.settings.admin_mfa_required:
+        raise HTTPException(status_code=403, detail="Admin MFA is required by the security policy.")
     try:
         await _service(request).disable_admin_mfa(user.user_id, payload.password, payload.code)
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except InvalidMfaSecret as exc:
+        raise HTTPException(
+            status_code=503, detail="MFA update is temporarily unavailable."
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503, detail="MFA update is temporarily unavailable."
+        ) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -544,15 +599,12 @@ async def chat_query(
         filters=payload.filters,
         options=QueryOptions(max_sources=payload.max_sources),
     )
-    normalized_query = payload.normalized_query or payload.question
     conversation_history = (
         await _load_conversation_history(request, user, conversation_id)
         if payload.conversation_id is not None
         else []
     )
-    # History is passed separately to generation for reference resolution.
-    # Retrieval should only search the current standalone query.
-    retrieval_query = normalized_query[:10_000]
+    retrieval_query = _retrieval_query(payload.question, conversation_history)
     started = datetime.now(UTC)
     try:
         async with asyncio.timeout(request.app.state.request_timeout_seconds):
@@ -794,6 +846,18 @@ def _frontend_sources(citations: list[Any]) -> list[dict[str, Any]]:
         )
         result.append(source)
     return result
+
+
+def _retrieval_query(question: str, history: list[ConversationTurn]) -> str:
+    """Add only the latest user turn for clear follow-ups; avoid stale-topic drift."""
+    if not _CONTEXTUAL_FOLLOWUP.search(question):
+        return question[:10_000]
+    previous_question = next(
+        (turn.text for turn in reversed(history) if turn.role == "user"), None
+    )
+    if not previous_question:
+        return question[:10_000]
+    return f"{previous_question} {question}"[:10_000]
 
 
 async def _persist_chat_turn(
