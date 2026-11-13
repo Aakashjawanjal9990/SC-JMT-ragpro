@@ -13,11 +13,12 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from app.adapters.fallback_generation import FallbackAnswerGeneration
 from app.adapters.local_test import LocalTestAnswerGeneration
 from app.adapters.postgres import PostgresQueryAdapter
 from app.adapters.pratik_generation import PratikAnswerGenerationAdapter
 from app.adapters.sqlite_sources import SqliteSourceRecordAdapter
-from app.adapters.vertex import VertexAIAdapter
+from app.adapters.vertex import GeminiAnswerAdapter, VertexAIAdapter
 from app.api.compat import router as compat_router
 from app.api.errors import register_error_handlers
 from app.api.routes import router
@@ -78,6 +79,27 @@ class _RetrievalSlot:
             return bool(result)
         except Exception:
             return False
+
+
+def _configured_answer_generation(settings: Settings) -> AnswerGenerationPort:
+    """The answer model from ANSWER_GENERATION_PROVIDER, wrapped with the
+    ANSWER_GENERATION_FALLBACK model when one is set."""
+    if settings.answer_generation_provider == "groq":
+        return PratikAnswerGenerationAdapter(settings)
+    if not GeminiAnswerAdapter.is_configured(settings):
+        if settings.answer_generation_fallback == "groq":
+            logger.warning("Gemini answer generation is not configured; using Groq only")
+            return PratikAnswerGenerationAdapter(settings)
+        return UnconfiguredAnswerGeneration()
+    primary = GeminiAnswerAdapter(settings)
+    if settings.answer_generation_fallback == "groq":
+        return FallbackAnswerGeneration(
+            primary,
+            PratikAnswerGenerationAdapter(settings),
+            primary_name=f"gemini:{settings.vertex_model_id}",
+            fallback_name=f"groq:{settings.groq_model_id}",
+        )
+    return primary
 
 
 def create_app(
@@ -158,13 +180,7 @@ def create_app(
                 os.getenv("LOCAL_TEST_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
                 and resolved_settings.environment.lower() == "development"
             )
-            else (
-                PratikAnswerGenerationAdapter(resolved_settings)
-                if resolved_settings.answer_generation_provider == "groq"
-                else vertex_adapter
-            )
-            if (resolved_settings.answer_generation_provider == "groq" or vertex_adapter)
-            else UnconfiguredAnswerGeneration()
+            else _configured_answer_generation(resolved_settings)
         )
     )
 
@@ -176,7 +192,9 @@ def create_app(
             warmup = getattr(retrieval, "warmup", None)
             if warmup is not None:
                 await asyncio.to_thread(warmup)
-        if isinstance(answer_generation_adapter, PratikAnswerGenerationAdapter):
+        if isinstance(
+            answer_generation_adapter, (PratikAnswerGenerationAdapter, FallbackAnswerGeneration)
+        ):
             await asyncio.to_thread(answer_generation_adapter.warmup)
         if retrieval is None and os.getenv(
             "RETRIEVAL_PORT_ADAPTER_ENABLED", "false"
@@ -292,7 +310,10 @@ def create_app(
                 await database_engine.dispose()
             if vertex_adapter is not None:
                 await vertex_adapter.close()
-            if isinstance(answer_generation_adapter, PratikAnswerGenerationAdapter):
+            if isinstance(
+                answer_generation_adapter,
+                (PratikAnswerGenerationAdapter, GeminiAnswerAdapter, FallbackAnswerGeneration),
+            ):
                 await answer_generation_adapter.close()
 
     application = FastAPI(
