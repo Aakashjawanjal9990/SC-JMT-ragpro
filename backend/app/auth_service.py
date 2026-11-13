@@ -1,15 +1,20 @@
 """Password, email-code, and opaque session-token operations."""
 
+import base64
 import hashlib
 import hmac
 import json
 import logging
 import secrets
+import struct
+import time
 from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 from uuid import UUID, uuid4
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -24,6 +29,7 @@ CODE_TTL_SECONDS = 600
 MAX_CODE_ATTEMPTS = 5
 SESSION_DAYS = 30
 ADMIN_SESSION_HOURS = 8
+TOTP_PERIOD_SECONDS = 30
 logger = logging.getLogger("supreme_court_rag.security")
 
 _CONSUME_CHALLENGE_SCRIPT = """
@@ -54,11 +60,16 @@ class AuthService:
         self._engine = engine
         self._redis = redis
         self._email_sender = email_sender
+        self._settings = settings
         self._challenge_secret = (
             settings.auth_challenge_secret.encode("utf-8")
             if settings.auth_challenge_secret
             else secrets.token_bytes(32)
         )
+        encryption_key = hmac.new(
+            self._challenge_secret, b"admin-totp-encryption:v1", hashlib.sha256
+        ).digest()
+        self._totp_cipher = AESGCM(encryption_key)
         self._password_hasher = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2)
         self._dummy_hash = self._password_hasher.hash(secrets.token_urlsafe(32))
 
@@ -69,6 +80,135 @@ class AuthService:
             return bool(await self._redis.ping())
         except (SQLAlchemyError, OSError):
             return False
+
+    async def begin_admin_mfa_setup(
+        self, user_id: str, password: str, current_code: str | None
+    ) -> dict[str, str]:
+        account = await self._fetch_user_by_id(UUID(user_id))
+        if not account or not self._verify_password(account["password_hash"], password):
+            raise PermissionError("Password is incorrect.")
+        if account["admin_mfa_enabled_at"] is not None:
+            active_secret = self._decrypt_totp_secret(
+                account["admin_mfa_secret_ciphertext"], user_id
+            )
+            active_counter = self._matching_totp_counter(active_secret, current_code or "")
+            if active_counter is None or not await self._consume_admin_totp_counter(
+                UUID(user_id), active_counter
+            ):
+                raise PermissionError("Current authenticator code is incorrect.")
+        secret = base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+        nonce = secrets.token_bytes(12)
+        encrypted = nonce + self._totp_cipher.encrypt(nonce, secret.encode("ascii"), user_id.encode())
+        async with self._engine.begin() as connection:
+            result = await connection.execute(
+                text(
+                    """UPDATE users SET admin_mfa_pending_secret_ciphertext = :secret,
+                              admin_mfa_pending_expires_at = now() + interval '10 minutes'
+                       WHERE user_uuid = :user_id AND role = 'admin'
+                         AND account_status = 'active'"""
+                ),
+                {"secret": base64.urlsafe_b64encode(encrypted).decode("ascii"), "user_id": UUID(user_id)},
+            )
+            if result.rowcount != 1:
+                raise ValueError("Active administrator account not found.")
+        label = quote(f"Supreme Court RAG:{user_id}")
+        uri = (
+            f"otpauth://totp/{label}?secret={secret}&issuer=Supreme%20Court%20RAG"
+            "&algorithm=SHA1&digits=6&period=30"
+        )
+        return {"secret": secret, "otpauthUri": uri}
+
+    async def confirm_admin_mfa_setup(self, user_id: str, code: str) -> None:
+        async with self._engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    text(
+                        """SELECT admin_mfa_pending_secret_ciphertext,
+                                  admin_mfa_pending_expires_at
+                           FROM users WHERE user_uuid = :user_id AND role = 'admin'"""
+                    ),
+                    {"user_id": UUID(user_id)},
+                )
+            ).mappings().one_or_none()
+        if not row or not row["admin_mfa_pending_secret_ciphertext"]:
+            raise ValueError("Start MFA setup before confirming it.")
+        if not row["admin_mfa_pending_expires_at"] or row["admin_mfa_pending_expires_at"] < datetime.now(UTC):
+            raise ValueError("MFA setup expired. Start setup again.")
+        secret = self._decrypt_totp_secret(row["admin_mfa_pending_secret_ciphertext"], user_id)
+        counter = self._matching_totp_counter(secret, code)
+        if counter is None:
+            raise ValueError("Authenticator code is invalid or expired.")
+        async with self._engine.begin() as connection:
+            result = await connection.execute(
+                text(
+                    """UPDATE users SET admin_mfa_secret_ciphertext = admin_mfa_pending_secret_ciphertext,
+                              admin_mfa_enabled_at = now(), admin_mfa_last_counter = :counter,
+                              admin_mfa_pending_secret_ciphertext = NULL,
+                              admin_mfa_pending_expires_at = NULL, updated_at = now()
+                       WHERE user_uuid = :user_id AND role = 'admin'
+                         AND admin_mfa_pending_expires_at > now()"""
+                ),
+                {"counter": counter, "user_id": UUID(user_id)},
+            )
+            if result.rowcount != 1:
+                raise ValueError("MFA setup expired. Start setup again.")
+
+    async def disable_admin_mfa(self, user_id: str, password: str, code: str) -> None:
+        if self._settings.admin_mfa_required:
+            raise PermissionError("Admin MFA is required by the current security policy.")
+        row = await self._fetch_user_by_id(UUID(user_id))
+        if not row or not self._verify_password(row["password_hash"], password):
+            raise PermissionError("Password or authenticator code is incorrect.")
+        if not row["admin_mfa_secret_ciphertext"]:
+            raise ValueError("MFA is not enabled.")
+        secret = self._decrypt_totp_secret(row["admin_mfa_secret_ciphertext"], user_id)
+        counter = self._matching_totp_counter(secret, code)
+        if counter is None or not await self._consume_admin_totp_counter(UUID(user_id), counter):
+            raise PermissionError("Password or authenticator code is incorrect.")
+        async with self._engine.begin() as connection:
+            await connection.execute(
+                text(
+                    """UPDATE users SET admin_mfa_secret_ciphertext = NULL,
+                              admin_mfa_enabled_at = NULL, admin_mfa_last_counter = -1,
+                              updated_at = now() WHERE user_uuid = :user_id AND role = 'admin'"""
+                ),
+                {"user_id": UUID(user_id)},
+            )
+
+    @staticmethod
+    def _totp_code(secret: str, counter: int) -> str:
+        key = base64.b32decode(secret + "=" * (-len(secret) % 8), casefold=True)
+        digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+        offset = digest[-1] & 0x0F
+        binary = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+        return f"{binary % 1_000_000:06d}"
+
+    @classmethod
+    def _matching_totp_counter(cls, secret: str, code: str) -> int | None:
+        if len(code) != 6 or not code.isdigit():
+            return None
+        current = int(time.time()) // TOTP_PERIOD_SECONDS
+        for counter in (current - 1, current, current + 1):
+            if counter >= 0 and hmac.compare_digest(cls._totp_code(secret, counter), code):
+                return counter
+        return None
+
+    def _decrypt_totp_secret(self, ciphertext: str, user_id: str) -> str:
+        raw = base64.urlsafe_b64decode(ciphertext.encode("ascii"))
+        return self._totp_cipher.decrypt(raw[:12], raw[12:], user_id.encode()).decode("ascii")
+
+    async def _consume_admin_totp_counter(self, user_id: UUID, counter: int) -> bool:
+        async with self._engine.begin() as connection:
+            result = await connection.execute(
+                text(
+                    """UPDATE users SET admin_mfa_last_counter = :counter
+                       WHERE user_uuid = :user_id AND role = 'admin'
+                         AND admin_mfa_enabled_at IS NOT NULL
+                         AND admin_mfa_last_counter < :counter"""
+                ),
+                {"counter": counter, "user_id": user_id},
+            )
+            return result.rowcount == 1
 
     async def register(
         self,
@@ -162,6 +302,7 @@ class AuthService:
         ip_address: str | None,
         user_agent: str | None,
         admin: bool = False,
+        mfa_code: str | None = None,
     ) -> tuple[str, dict[str, str], AuthenticatedUser]:
         normalized_email = self._normalize_email(email)
         result = await self._fetch_user_by_email(normalized_email)
@@ -202,6 +343,24 @@ class AuthService:
                 user_id=UUID(str(result["user_uuid"])),
             )
             raise PermissionError("Admin credentials are incorrect.")
+        if admin and self._settings.admin_mfa_required and result["admin_mfa_enabled_at"] is None:
+            raise PermissionError("Admin MFA enrollment is required before signing in.")
+        if admin and result["admin_mfa_enabled_at"] is not None:
+            secret = self._decrypt_totp_secret(
+                result["admin_mfa_secret_ciphertext"], str(result["user_uuid"])
+            )
+            counter = self._matching_totp_counter(secret, mfa_code or "")
+            if counter is None or not await self._consume_admin_totp_counter(
+                UUID(str(result["user_uuid"])), counter
+            ):
+                await self._log_auth_failure(
+                    "admin_mfa_rejected",
+                    normalized_email,
+                    ip_address,
+                    user_agent,
+                    user_id=UUID(str(result["user_uuid"])),
+                )
+                raise PermissionError("Admin credentials or authenticator code are incorrect.")
         if not admin and result["role"] == "admin":
             # A regular login would otherwise grant admin APIs a 30-day session.
             await self._log_auth_failure(
@@ -388,12 +547,25 @@ class AuthService:
             result = await connection.execute(
                 text(
                     """SELECT user_uuid, username, email, password_hash, full_name,
-                              role, account_status
+                              role, account_status, admin_mfa_secret_ciphertext,
+                              admin_mfa_enabled_at
                        FROM users
                        WHERE lower(email) = :email OR lower(username) = :email
                        LIMIT 1"""
                 ),
                 {"email": email},
+            )
+            return result.mappings().one_or_none()
+
+    async def _fetch_user_by_id(self, user_id: UUID):
+        async with self._engine.connect() as connection:
+            result = await connection.execute(
+                text(
+                    """SELECT user_uuid, email, password_hash, role,
+                              admin_mfa_secret_ciphertext, admin_mfa_enabled_at
+                       FROM users WHERE user_uuid = :user_id AND role = 'admin'"""
+                ),
+                {"user_id": user_id},
             )
             return result.mappings().one_or_none()
 

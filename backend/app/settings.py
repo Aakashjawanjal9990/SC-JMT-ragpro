@@ -17,6 +17,7 @@ class Settings:
     database_url: str | None = None
     redis_url: str | None = None
     auth_challenge_secret: str | None = None
+    admin_mfa_required: bool = False
     session_cookie_name: str = "nm_session"
     admin_session_cookie_name: str = "nm_admin_session"
     session_cookie_samesite: str = "lax"
@@ -135,6 +136,9 @@ class Settings:
         database_url = os.getenv("DATABASE_URL") or None
         redis_url = os.getenv("REDIS_URL") or None
         auth_challenge_secret = os.getenv("AUTH_CHALLENGE_SECRET") or None
+        admin_mfa_required = os.getenv("ADMIN_MFA_REQUIRED", "false").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
         session_cookie_name = os.getenv("SESSION_COOKIE_NAME", "nm_session").strip()
         admin_session_cookie_name = os.getenv(
             "ADMIN_SESSION_COOKIE_NAME", "nm_admin_session"
@@ -234,6 +238,7 @@ class Settings:
             database_url=database_url,
             redis_url=redis_url,
             auth_challenge_secret=auth_challenge_secret,
+            admin_mfa_required=admin_mfa_required,
             session_cookie_name=session_cookie_name,
             admin_session_cookie_name=admin_session_cookie_name,
             session_cookie_samesite=session_cookie_samesite,

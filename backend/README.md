@@ -33,6 +33,31 @@ The query API uses AlloyDB's native `pg_textsearch` BM25 operator against `chunk
 
 The supplied AlloyDB schema dump includes the live judgment, source, page, authentication, and history tables, as well as the `pg_textsearch` extension and `idx_chunks_bm25`. Cloud Build does not run migrations. **Do not run `alembic upgrade head` against the existing AlloyDB database**; it would try to create tables that already exist. Fresh databases can use migrations after the schema and required extension setup are reviewed.
 
+## Administrator MFA rollout
+
+Admin MFA uses six-digit TOTP codes from an authenticator app. The backend encrypts each secret in the database with AES-GCM, deriving the encryption key from `AUTH_CHALLENGE_SECRET`. Keep that secret stable and backed up; changing it requires every admin to enroll MFA again. Codes are single-use within their 30-second window. There are no recovery codes, so an operator must reset an admin's MFA columns after verifying their identity if they lose their authenticator.
+
+The backend adds these endpoints (admin session plus the usual trusted-origin and CSRF checks):
+
+- `POST /api/admin/mfa/setup` with `{ "password": "...", "currentCode": "123456" }` starts enrollment and returns `{ "secret": "...", "otpauthUri": "..." }`. `currentCode` is required when replacing an existing authenticator. Display the secret/QR only during enrollment and do not log or persist it in the browser.
+- `POST /api/admin/mfa/enable` with `{ "code": "123456" }` verifies the authenticator and enables MFA.
+- `POST /api/admin/login` accepts `{ "username": "...", "password": "...", "mfaCode": "123456" }` for enrolled admins.
+- `POST /api/admin/mfa/disable` with `{ "password": "...", "code": "123456" }` disables MFA only while the policy is optional. The backend rejects disabling when MFA is required.
+
+The current frontend has no MFA enrollment or login-code UI, so these backend endpoints need corresponding frontend integration before admins can use MFA through the app. Keep `ADMIN_MFA_REQUIRED=false` while the UI is added and every administrator enrolls. Then set Cloud Build substitution `_ADMIN_MFA_REQUIRED=true` and deploy; unenrolled admins cannot sign in after enforcement is enabled. Cloud Build defaults this substitution to `false`.
+
+Cloud Build intentionally does not modify the existing AlloyDB schema. Before deploying the MFA code, have an authorized database operator verify the columns are absent and apply:
+
+```sql
+ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_mfa_secret_ciphertext text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_mfa_pending_secret_ciphertext text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_mfa_pending_expires_at timestamptz;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_mfa_enabled_at timestamptz;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_mfa_last_counter bigint NOT NULL DEFAULT -1;
+```
+
+The Alembic migration `0003_admin_totp_mfa` contains the equivalent change for databases managed through the migration chain. Do not run it on the existing AlloyDB database unless its migration history has first been reconciled with the live schema.
+
 ## Production configuration
 
 Production requires `DATABASE_URL` pointing to AlloyDB with `postgresql+asyncpg`, `REDIS_URL`, `AUTH_CHALLENGE_SECRET` (at least 32 bytes), `GROQ_API_KEY`, SMTP host/from address, and exact HTTPS `CORS_ORIGINS`. Store database, Redis, Groq, SMTP credentials, and challenge secret in Secret Manager. Configure Cloud Run networking so it can securely reach AlloyDB and Redis, and use a least-privilege runtime service account. The local Compose PostgreSQL image does not include AlloyDB's `pg_textsearch`; use the AlloyDB URL for BM25 query testing.
@@ -53,4 +78,4 @@ The adapter verifies citation identity and source/page provenance. It does not y
 - Successful sign-ins and sign-outs, registration, verification, password resets, and failed password/code attempts are recorded in `user_activity_logs`. Failed identities are represented by a hash. Do not log credentials, session tokens, or user query text in auth activity events; chat query text is stored in `query_runs` under the configured retention policy.
 - `/ready` returns only an aggregate ready/not-ready status; dependency details are not exposed publicly.
 
-Administrator accounts must use the dedicated admin sign-in endpoint, which issues the separate, shorter eight-hour admin session; a regular login cannot create an admin session. The frontend receives a CSRF token in the login response and keeps it in memory; the opaque session token is never returned to JavaScript. Admin sign-in still uses password authentication without MFA. Adding MFA requires a coordinated admin login and recovery flow in the frontend; the backend-only security changes preserve the current API contract. Tenant isolation is also not implemented because the indexed judgment corpus is shared and public; private tenant documents require tenant ownership filters in retrieval and source resolution before they are introduced.
+Administrator accounts must use the dedicated admin sign-in endpoint, which issues the separate, shorter eight-hour admin session; a regular login cannot create an admin session. The frontend receives a CSRF token in the login response and keeps it in memory; the opaque session token is never returned to JavaScript. Admin MFA is implemented in the backend and is optional until `ADMIN_MFA_REQUIRED` is enabled; see the rollout steps above. Tenant isolation is also not implemented because the indexed judgment corpus is shared and public; private tenant documents require tenant ownership filters in retrieval and source resolution before they are introduced.

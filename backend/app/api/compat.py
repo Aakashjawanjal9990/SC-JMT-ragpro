@@ -49,6 +49,27 @@ class AdminCredentials(BaseModel):
 
     username: str = Field(min_length=1, max_length=320)
     password: str = Field(min_length=8, max_length=128)
+    mfa_code: str | None = Field(default=None, pattern=r"^[0-9]{6}$", alias="mfaCode")
+
+
+class AdminMfaCode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class AdminMfaSetup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(min_length=8, max_length=128)
+    current_code: str | None = Field(default=None, pattern=r"^[0-9]{6}$", alias="currentCode")
+
+
+class AdminMfaDisable(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(min_length=8, max_length=128)
+    code: str = Field(pattern=r"^[0-9]{6}$")
 
 
 class EmailOnly(BaseModel):
@@ -338,6 +359,7 @@ async def admin_login(
             ip_address=_ip(request),
             user_agent=request.headers.get("user-agent"),
             admin=True,
+            mfa_code=payload.mfa_code,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
@@ -345,6 +367,59 @@ async def admin_login(
         response, request, token, max_age=ADMIN_SESSION_HOURS * 60 * 60, admin=True
     )
     return {"user": user, "csrfToken": csrf_token}
+
+
+@router.post("/admin/mfa/setup")
+async def start_admin_mfa_setup(
+    payload: AdminMfaSetup,
+    request: Request,
+    response: Response,
+    user: AuthenticatedUser = Depends(require_admin_user),
+) -> dict[str, str]:
+    if not user.user_id:
+        raise HTTPException(status_code=401, detail="An app admin session is required.")
+    try:
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        return await _service(request).begin_admin_mfa_setup(
+            user.user_id, payload.password, payload.current_code
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/admin/mfa/enable", status_code=status.HTTP_204_NO_CONTENT)
+async def enable_admin_mfa(
+    payload: AdminMfaCode,
+    request: Request,
+    user: AuthenticatedUser = Depends(require_admin_user),
+) -> Response:
+    if not user.user_id:
+        raise HTTPException(status_code=401, detail="An app admin session is required.")
+    try:
+        await _service(request).confirm_admin_mfa_setup(user.user_id, payload.code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/admin/mfa/disable", status_code=status.HTTP_204_NO_CONTENT)
+async def disable_admin_mfa(
+    payload: AdminMfaDisable,
+    request: Request,
+    user: AuthenticatedUser = Depends(require_admin_user),
+) -> Response:
+    if not user.user_id:
+        raise HTTPException(status_code=401, detail="An app admin session is required.")
+    try:
+        await _service(request).disable_admin_mfa(user.user_id, payload.password, payload.code)
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/admin/logout")
