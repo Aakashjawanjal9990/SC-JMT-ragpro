@@ -9,7 +9,7 @@ from google.genai import types
 from pydantic import ValidationError
 
 from app.models import ConversationTurn, EvidenceInput, GeneratedAnswer
-from app.ports import AnswerGenerationPort, DependencyUnavailable, QueryEmbeddingPort
+from app.ports import AnswerGenerationPort, DependencyUnavailable
 from app.settings import Settings
 
 # Written out rather than passing GeneratedAnswer: its extra="forbid" becomes
@@ -139,89 +139,6 @@ class GeminiAnswerAdapter(AnswerGenerationPort):
     async def healthcheck(self) -> bool:
         try:
             await self._async_client.models.get(model=self._model)
-        except Exception:
-            return False
-        return True
-
-    async def close(self) -> None:
-        await self._async_client.aclose()
-        self._client.close()
-
-
-class VertexAIAdapter(AnswerGenerationPort, QueryEmbeddingPort):
-    def __init__(self, settings: Settings) -> None:
-        if not all(
-            (
-                settings.google_cloud_project,
-                settings.google_cloud_location,
-                settings.vertex_model_id,
-                settings.vertex_embedding_model_id,
-            )
-        ):
-            raise ValueError("Vertex project, location, and model ID are required.")
-        self._model = settings.vertex_model_id
-        self._embedding_model = settings.vertex_embedding_model_id
-        self._client = genai.Client(
-            vertexai=True,
-            project=settings.google_cloud_project,
-            location=settings.google_cloud_location,
-        )
-        self._async_client = self._client.aio
-
-    async def generate(
-        self,
-        question: str,
-        evidence: Sequence[EvidenceInput],
-        *,
-        think: bool = False,
-        conversation_history: Sequence[ConversationTurn] = (),
-    ) -> GeneratedAnswer:
-        return await _generate_grounded_answer(
-            self._async_client,
-            self._model,
-            question,
-            evidence,
-            think=think,
-            conversation_history=conversation_history,
-        )
-
-    async def embed_query(self, question: str) -> Sequence[float]:
-        try:
-            response = await self._async_client.models.embed_content(
-                model=self._embedding_model,
-                contents=question,
-                config=types.EmbedContentConfig(
-                    task_type="RETRIEVAL_QUERY",
-                    output_dimensionality=768,
-                ),
-            )
-        except Exception as exc:
-            raise DependencyUnavailable("Vertex AI query embedding failed.") from exc
-        if not response.embeddings or not response.embeddings[0].values:
-            raise DependencyUnavailable("Vertex AI returned no query embedding.")
-        return response.embeddings[0].values
-
-    async def embed_document(self, text: str) -> Sequence[float]:
-        """Generate the matching vector that ingestion stores with each passage."""
-        try:
-            response = await self._async_client.models.embed_content(
-                model=self._embedding_model,
-                contents=text,
-                config=types.EmbedContentConfig(
-                    task_type="RETRIEVAL_DOCUMENT",
-                    output_dimensionality=768,
-                ),
-            )
-        except Exception as exc:
-            raise DependencyUnavailable("Vertex AI document embedding failed.") from exc
-        if not response.embeddings or not response.embeddings[0].values:
-            raise DependencyUnavailable("Vertex AI returned no document embedding.")
-        return response.embeddings[0].values
-
-    async def healthcheck(self) -> bool:
-        try:
-            await self._async_client.models.get(model=self._model)
-            await self._async_client.models.get(model=self._embedding_model)
         except Exception:
             return False
         return True
