@@ -604,7 +604,11 @@ async def chat_query(
         if payload.conversation_id is not None
         else []
     )
-    retrieval_query = _retrieval_query(payload.question, conversation_history)
+    retrieval_query = _retrieval_query(
+        payload.question,
+        conversation_history,
+        payload.search_terms,
+    )
     started = datetime.now(UTC)
     try:
         async with asyncio.timeout(request.app.state.request_timeout_seconds):
@@ -848,16 +852,31 @@ def _frontend_sources(citations: list[Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _retrieval_query(question: str, history: list[ConversationTurn]) -> str:
-    """Add only the latest user turn for clear follow-ups; avoid stale-topic drift."""
+def _retrieval_query(
+    question: str,
+    history: list[ConversationTurn],
+    search_terms: list[str] | None = None,
+) -> str:
+    """Add follow-up context and bounded frontend hints for retrieval only."""
     if not _CONTEXTUAL_FOLLOWUP.search(question):
-        return question[:10_000]
-    previous_question = next(
-        (turn.text for turn in reversed(history) if turn.role == "user"), None
-    )
-    if not previous_question:
-        return question[:10_000]
-    return f"{previous_question} {question}"[:10_000]
+        retrieval_base = question[:10_000]
+    else:
+        previous_question = next(
+            (turn.text for turn in reversed(history) if turn.role == "user"), None
+        )
+        retrieval_base = (
+            f"{previous_question} {question}"[:10_000]
+            if previous_question
+            else question[:10_000]
+        )
+
+    # ChatQuery validates each hint and limits the list to 20 items and 200
+    # characters each. Keep the original question first, then append the hints
+    # only to the retrieval input; answer generation continues to use question.
+    cleaned_terms = [term.strip() for term in (search_terms or []) if term.strip()]
+    if not cleaned_terms:
+        return retrieval_base
+    return f"{retrieval_base} {' '.join(cleaned_terms)}"[:15_000]
 
 
 async def _persist_chat_turn(
