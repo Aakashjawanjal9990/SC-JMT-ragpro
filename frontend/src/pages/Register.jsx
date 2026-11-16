@@ -46,7 +46,7 @@ function VerifyStep({ email, onBack }) {
   };
 
   const resend = async () => {
-    if (resendBusy || left > 0) return;
+    if (resendBusy || busy || left > 0) return;
 
     setResendBusy(true);
     setError('');
@@ -77,7 +77,7 @@ function VerifyStep({ email, onBack }) {
               type="button"
               className="linkbtn"
               onClick={resend}
-              disabled={resendBusy}
+              disabled={resendBusy || busy}
             >
               {resendBusy ? 'Sending…' : 'Resend code'}
             </button>
@@ -91,7 +91,15 @@ function VerifyStep({ email, onBack }) {
         </>
       }
     >
-      <OtpField value={code} onChange={setCode} error={error} />
+      <OtpField
+        value={code}
+        disabled={busy}
+        onChange={(value) => {
+          setCode(value);
+          setError('');
+        }}
+        error={error}
+      />
       <PrimaryButton type="submit" loading={busy} disabled={busy}>
         Verify and continue
       </PrimaryButton>
@@ -125,11 +133,22 @@ export default function Register() {
   };
 
   const set = (key) => (e) => {
-    setForm({ ...form, [key]: e.target.value });
+    const value = e.target.value;
+    setForm((prev) => ({ ...prev, [key]: value }));
+    setFormError('');
 
-    if (errors[key]) {
-      setErrors({ ...errors, [key]: '' });
-    }
+    setErrors((prev) => {
+      const next = { ...prev };
+      if (key === 'confirm' && (next.confirm || value)) {
+        next.confirm = value === form.password ? '' : 'Passwords do not match.';
+      } else if (next[key]) {
+        next[key] = '';
+      }
+      if (key === 'password' && form.confirm) {
+        next.confirm = form.confirm === value ? '' : 'Passwords do not match.';
+      }
+      return next;
+    });
   };
 
   const validateOne = (key) => () =>
@@ -206,6 +225,7 @@ export default function Register() {
         onChange={set('name')}
         onBlur={validateOne('name')}
         error={errors.name}
+        disabled={busy}
       />
 
       <TextField
@@ -216,6 +236,7 @@ export default function Register() {
         onChange={set('email')}
         onBlur={validateOne('email')}
         error={errors.email}
+        disabled={busy}
       />
 
       <TextField
@@ -226,7 +247,8 @@ export default function Register() {
         onChange={set('password')}
         onBlur={validateOne('password')}
         error={errors.password}
-        hint="Use at least 8 characters with a letter and a number."
+        hint="Use 8–128 characters with at least one letter and one number."
+        disabled={busy}
       />
 
       <TextField
@@ -237,15 +259,18 @@ export default function Register() {
         onChange={set('confirm')}
         onBlur={validateOne('confirm')}
         error={errors.confirm}
+        disabled={busy}
       />
 
       <label className="check top">
         <input
           type="checkbox"
           checked={agree}
+          disabled={busy}
           onChange={(e) => {
             setAgree(e.target.checked);
-            setErrors({ ...errors, agree: '' });
+            setFormError('');
+            setErrors((prev) => ({ ...prev, agree: '' }));
           }}
         />
         I understand that Nyaya-Mitra provides research assistance, not legal

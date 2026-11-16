@@ -5,6 +5,8 @@ export default function OtpField({
   value,
   onChange,
   error,
+  onBlur,
+  disabled = false,
   label = 'Verification code',
 }) {
   return (
@@ -15,7 +17,9 @@ export default function OtpField({
       className="otp"
       placeholder="••••••"
       value={value}
+      disabled={disabled}
       onChange={(e) => onChange(e.target.value.replace(/\D/g, '').slice(0, 6))}
+      onBlur={onBlur}
       error={error}
     />
   );

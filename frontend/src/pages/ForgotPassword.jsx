@@ -94,15 +94,39 @@ export default function ForgotPassword() {
   };
 
   const set = (key) => (e) => {
-    setForm({ ...form, [key]: e.target.value });
+    const value = e.target.value;
+    setForm((prev) => ({ ...prev, [key]: value }));
+    setFormError('');
+    setResendNotice('');
 
-    if (errors[key]) {
-      setErrors({ ...errors, [key]: '' });
-    }
+    setErrors((prev) => {
+      const next = { ...prev };
+      if (key === 'confirm' && (next.confirm || value)) {
+        next.confirm = value === form.password ? '' : 'Passwords do not match.';
+      } else if (next[key]) {
+        next[key] = '';
+      }
+      if (key === 'password' && form.confirm) {
+        next.confirm = form.confirm === value ? '' : 'Passwords do not match.';
+      }
+      return next;
+    });
+  };
+
+  const validateResetField = (key) => () => {
+    const message =
+      key === 'code'
+        ? validateCode(form.code)
+        : key === 'password'
+          ? validatePassword(form.password)
+          : form.confirm === form.password
+            ? ''
+            : 'Passwords do not match.';
+    setErrors((prev) => ({ ...prev, [key]: message }));
   };
 
   const resendCode = async () => {
-    if (resendBusy || left > 0) return;
+    if (resendBusy || busy || left > 0) return;
 
     setResendBusy(true);
     setFormError('');
@@ -153,7 +177,7 @@ export default function ForgotPassword() {
             <button
               type="button"
               className="linkbtn"
-              disabled={resendBusy}
+              disabled={resendBusy || busy}
               onClick={resendCode}
             >
               {resendBusy ? 'Sending…' : 'Resend code'}
@@ -163,7 +187,14 @@ export default function ForgotPassword() {
       >
         <OtpField
           value={form.code}
-          onChange={(code) => setForm({ ...form, code })}
+          disabled={busy}
+          onChange={(code) => {
+            setForm((prev) => ({ ...prev, code }));
+            setErrors((prev) => ({ ...prev, code: '' }));
+            setFormError('');
+            setResendNotice('');
+          }}
+          onBlur={validateResetField('code')}
           error={errors.code}
         />
 
@@ -172,9 +203,11 @@ export default function ForgotPassword() {
           type="password"
           autoComplete="new-password"
           value={form.password}
+          disabled={busy}
           onChange={set('password')}
+          onBlur={validateResetField('password')}
           error={errors.password}
-          hint="Use at least 8 characters with a letter and a number."
+          hint="Use 8–128 characters with at least one letter and one number."
         />
 
         <TextField
@@ -182,7 +215,9 @@ export default function ForgotPassword() {
           type="password"
           autoComplete="new-password"
           value={form.confirm}
+          disabled={busy}
           onChange={set('confirm')}
+          onBlur={validateResetField('confirm')}
           error={errors.confirm}
         />
 
@@ -218,10 +253,15 @@ export default function ForgotPassword() {
         type="email"
         autoComplete="email"
         value={email}
+        disabled={busy}
         onChange={(e) => {
           setEmail(e.target.value);
-          setErrors({});
+          setErrors((prev) => ({ ...prev, email: '' }));
+          setFormError('');
         }}
+        onBlur={() =>
+          setErrors((prev) => ({ ...prev, email: validateEmail(email) }))
+        }
         error={errors.email}
       />
 

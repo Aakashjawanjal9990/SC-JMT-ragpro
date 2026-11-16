@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
+import { MAX_PASSWORD_LENGTH } from '../lib/validators';
 
 /** Labelled input with inline error, optional hint and show/hide password. */
 export default function TextField({
@@ -8,6 +9,7 @@ export default function TextField({
   hint,
   type = 'text',
   id,
+  maxLength,
   ...rest
 }) {
   const [shown, setShown] = useState(false);
@@ -22,6 +24,9 @@ export default function TextField({
           type={isPassword && shown ? 'text' : type}
           aria-invalid={Boolean(error)}
           aria-describedby={error ? `${fieldId}-msg` : undefined}
+          maxLength={
+            maxLength ?? (isPassword ? MAX_PASSWORD_LENGTH : undefined)
+          }
           {...rest}
         />
         {isPassword && (

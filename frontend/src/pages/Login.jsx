@@ -4,7 +4,7 @@ import AuthLayout from '../components/AuthLayout';
 import { PrimaryButton } from '../components/Buttons';
 import TextField from '../components/TextField';
 import { useAuth } from '../context/AuthContext';
-import { validateEmail } from '../lib/validators';
+import { validateEmail, validatePasswordLength } from '../lib/validators';
 
 export default function Login() {
   const { user, login } = useAuth();
@@ -21,17 +21,26 @@ export default function Login() {
   if (user) return <Navigate to={from} replace />;
 
   const set = (key) => (e) => {
-    setForm({ ...form, [key]: e.target.value });
-    if (errors[key]) setErrors({ ...errors, [key]: '' });
+    const value = e.target.value;
+    setForm((prev) => ({ ...prev, [key]: value }));
+    setFormError('');
+    if (errors[key]) setErrors((prev) => ({ ...prev, [key]: '' }));
   };
 
   const submit = async (e) => {
     e.preventDefault();
     setFormError('');
+    if (busy) return;
+
     const next = {};
     const emailError = validateEmail(form.email);
     if (emailError) next.email = emailError;
-    if (!form.password) next.password = 'Enter your password.';
+    if (!form.password) {
+      next.password = 'Enter your password.';
+    } else {
+      const passwordLengthError = validatePasswordLength(form.password);
+      if (passwordLengthError) next.password = passwordLengthError;
+    }
     setErrors(next);
     if (Object.keys(next).length) return;
     setBusy(true);
@@ -67,6 +76,7 @@ export default function Login() {
         autoComplete="email"
         placeholder="you@example.com"
         value={form.email}
+        disabled={busy}
         onChange={set('email')}
         error={errors.email}
       />
@@ -75,14 +85,17 @@ export default function Login() {
         type="password"
         autoComplete="current-password"
         value={form.password}
+        disabled={busy}
         onChange={set('password')}
         error={errors.password}
+        hint="Passwords can be up to 128 characters."
       />
       <div className="between">
         <label className="check">
           <input
             type="checkbox"
             checked={remember}
+            disabled={busy}
             onChange={(e) => setRemember(e.target.checked)}
           />
           Remember me

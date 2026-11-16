@@ -156,14 +156,17 @@ export default function useChat() {
     setArchivedStatus('idle');
   }, []);
 
-  const restore = useCallback(async (id) => {
-    await api.restoreConversation(id);
+  const restore = useCallback(
+    async (id) => {
+      await api.restoreConversation(id);
 
-    setArchived((prev) => prev.filter((c) => String(c.id) !== String(id)));
+      setArchived((prev) => prev.filter((c) => String(c.id) !== String(id)));
 
-    setConversationsStatus('loading');
-    setArchivedStatus('idle');
-  }, []);
+      // Keep the archived view in its ready state while refreshing the sidebar.
+      await loadConversations();
+    },
+    [loadConversations],
+  );
 
   return {
     messages,

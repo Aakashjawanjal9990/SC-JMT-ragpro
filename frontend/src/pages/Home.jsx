@@ -10,67 +10,51 @@ import { displayName, getFirstName } from '../lib/names';
 import { validateQuery } from '../lib/validators';
 
 const MAX_HEIGHT = 140;
-
 const WISH_KEY = 'nm_wish_day';
-
-/**
- * Render the supported **bold** Markdown syntax as safe React text nodes.
- * All other response content remains plain text and is escaped by React.
- *
- * @param {string} value - Assistant response text.
- * @returns {React.ReactNode[]} Safe text and strong elements.
- */
-function renderBoldText(value) {
-  return String(value ?? '')
-    .split(/(\*\*[^*\n]+?\*\*)/g)
-    .map((part, index) => {
-      if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
-        return <strong key={index}>{part.slice(2, -2)}</strong>;
-      }
-
-      return part;
-    });
-}
 
 export default function Home() {
   const { user } = useAuth();
   const chat = useChat();
   const [params, setParams] = useSearchParams();
-
-  const requestedConversationId = params.get('c');
-
+  const routeConversationId = params.get('c');
   const openConversation = chat.open;
-  const resetChat = chat.reset;
-
-  const lastRequestedIdRef = useRef(undefined);
-  const activeConversationIdRef = useRef(chat.conversationId);
-  const skipNextOpenRef = useRef(null);
-
-  activeConversationIdRef.current = chat.conversationId;
+  const resetConversation = chat.reset;
+  const { conversationId } = chat;
+  const routeChangeRef = useRef(true);
+  const chatStateRef = useRef(null);
 
   useEffect(() => {
-    if (requestedConversationId === lastRequestedIdRef.current) {
-      return;
-    }
+    chatStateRef.current = {
+      conversationId,
+      openConversation,
+      resetConversation,
+    };
+  });
 
-    lastRequestedIdRef.current = requestedConversationId;
+  useEffect(() => {
+    routeChangeRef.current = true;
+    const current = chatStateRef.current;
 
-    if (!requestedConversationId) {
-      if (activeConversationIdRef.current !== null) {
-        resetChat();
+    if (routeConversationId) {
+      if (String(current.conversationId) !== routeConversationId) {
+        current.openConversation(routeConversationId);
       }
+    } else if (
+      current.conversationId !== null &&
+      current.conversationId !== undefined
+    ) {
+      current.resetConversation();
+    }
+  }, [routeConversationId]); // React to browser URL navigation, not chat state changes.
+
+  useEffect(() => {
+    if (routeChangeRef.current) {
+      routeChangeRef.current = false;
       return;
     }
-
-    if (skipNextOpenRef.current === requestedConversationId) {
-      skipNextOpenRef.current = null;
-      return;
-    }
-
-    if (String(activeConversationIdRef.current) !== requestedConversationId) {
-      openConversation(requestedConversationId);
-    }
-  }, [requestedConversationId, openConversation, resetChat]);
+    if (conversationId === null || conversationId === undefined) return;
+    setParams({ c: String(conversationId) }, { replace: true });
+  }, [conversationId, setParams]);
 
   const [showArchived, setShowArchived] = useState(false);
   const [question, setQuestion] = useState('');
@@ -122,7 +106,7 @@ export default function Home() {
     el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT)}px`;
   }, [question]);
 
-  const submit = async (e) => {
+  const submit = (e) => {
     e.preventDefault();
 
     const text = question.trim();
@@ -139,17 +123,7 @@ export default function Home() {
     setQuestionError('');
     setInitialDailyState(false);
     setQuestion('');
-
-    const newConversationId = await chat.send(text, { think });
-
-    if (newConversationId !== null && newConversationId !== undefined) {
-      const nextId = String(newConversationId);
-
-      if (params.get('c') !== nextId) {
-        skipNextOpenRef.current = nextId;
-        setParams({ c: nextId }, { replace: true });
-      }
-    }
+    chat.send(text, { think });
   };
 
   const startNewResearch = () => {
@@ -174,12 +148,7 @@ export default function Home() {
 
   const openConversationFromSidebar = (id) => {
     setShowArchived(false);
-
-    const nextId = String(id);
-
-    if (params.get('c') !== nextId) {
-      setParams({ c: nextId });
-    }
+    chat.open(id);
   };
 
   return (
@@ -252,11 +221,7 @@ export default function Home() {
 
             {chat.messages.map((m, i) => (
               <div key={i} className={`msg ${m.role} ${m.error ? 'err' : ''}`}>
-                <p>
-                  {m.role === 'assistant' && !m.error
-                    ? renderBoldText(m.text)
-                    : m.text}
-                </p>
+                <p>{m.text}</p>
                 {m.sources?.map((s, j) => (
                   <span key={`${s.case}-${j}`} className="src">
                     {s.case}
