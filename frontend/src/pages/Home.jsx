@@ -16,15 +16,42 @@ export default function Home() {
   const { user } = useAuth();
   const chat = useChat();
   const [params, setParams] = useSearchParams();
-  const [initialId] = useState(() => params.get('c'));
+  const routeConversationId = params.get('c');
   const openConversation = chat.open;
+  const resetConversation = chat.reset;
   const { conversationId } = chat;
+  const routeChangeRef = useRef(true);
+  const chatStateRef = useRef(null);
 
   useEffect(() => {
-    if (initialId) openConversation(initialId);
-  }, [initialId, openConversation]);
+    chatStateRef.current = {
+      conversationId,
+      openConversation,
+      resetConversation,
+    };
+  });
 
   useEffect(() => {
+    routeChangeRef.current = true;
+    const current = chatStateRef.current;
+
+    if (routeConversationId) {
+      if (String(current.conversationId) !== routeConversationId) {
+        current.openConversation(routeConversationId);
+      }
+    } else if (
+      current.conversationId !== null &&
+      current.conversationId !== undefined
+    ) {
+      current.resetConversation();
+    }
+  }, [routeConversationId]); // React to browser URL navigation, not chat state changes.
+
+  useEffect(() => {
+    if (routeChangeRef.current) {
+      routeChangeRef.current = false;
+      return;
+    }
     if (conversationId === null || conversationId === undefined) return;
     setParams({ c: String(conversationId) }, { replace: true });
   }, [conversationId, setParams]);

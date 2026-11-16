@@ -2,6 +2,8 @@
 const NAME = /^\p{L}+\.?(?:[ '’-]+\p{L}+\.?)*$/u;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+export const MAX_PASSWORD_LENGTH = 128;
+
 export function validateName(value) {
   const name = value.trim();
   if (!name) return 'Enter your full name.';
@@ -16,8 +18,16 @@ export function validateEmail(value) {
   return EMAIL.test(value.trim()) ? '' : 'Enter a valid email address.';
 }
 
+export function validatePasswordLength(value) {
+  return value.length > MAX_PASSWORD_LENGTH
+    ? `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.`
+    : '';
+}
+
 export function validatePassword(value) {
   if (value.length < 8) return 'Use at least 8 characters.';
+  const lengthError = validatePasswordLength(value);
+  if (lengthError) return lengthError;
   if (!/[A-Za-z]/.test(value) || !/\d/.test(value)) {
     return 'Include at least one letter and one number.';
   }

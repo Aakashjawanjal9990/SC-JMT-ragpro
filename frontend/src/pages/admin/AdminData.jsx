@@ -14,8 +14,13 @@ const daysAgo = (days) => {
   return isoDay(d);
 };
 
-const dateFmt = (value) =>
-  value ? new Date(value).toLocaleString('en-IN') : 'Not recorded';
+const dateFmt = (value) => {
+  if (!value) return 'Not recorded';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? 'Invalid date'
+    : date.toLocaleString('en-IN');
+};
 
 const label = (value) =>
   value

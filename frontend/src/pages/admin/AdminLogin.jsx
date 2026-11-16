@@ -14,6 +14,7 @@ export default function AdminLogin({ onSuccess }) {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (busy) return;
     if (!form.username.trim() || !form.password) {
       setError('Enter the admin username and passkey.');
       return;
@@ -30,7 +31,10 @@ export default function AdminLogin({ onSuccess }) {
     }
   };
 
-  const set = (key) => (e) => setForm({ ...form, [key]: e.target.value });
+  const set = (key) => (e) => {
+    setForm((prev) => ({ ...prev, [key]: e.target.value }));
+    setError('');
+  };
 
   return (
     <div className="admin-gate">
@@ -48,6 +52,7 @@ export default function AdminLogin({ onSuccess }) {
           label="Admin username"
           autoComplete="username"
           value={form.username}
+          disabled={busy}
           onChange={set('username')}
         />
         <TextField
@@ -55,6 +60,7 @@ export default function AdminLogin({ onSuccess }) {
           type="password"
           autoComplete="current-password"
           value={form.password}
+          disabled={busy}
           onChange={set('password')}
         />
         {error && (
