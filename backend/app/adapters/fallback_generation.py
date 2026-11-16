@@ -42,10 +42,15 @@ class FallbackAnswerGeneration(AnswerGenerationPort):
         *,
         think: bool = False,
         conversation_history: Sequence[ConversationTurn] = (),
+        conversation_summary: str = "",
     ) -> GeneratedAnswer:
         try:
             return await self._primary.generate(
-                question, evidence, think=think, conversation_history=conversation_history
+                question,
+                evidence,
+                think=think,
+                conversation_history=conversation_history,
+                conversation_summary=conversation_summary,
             )
         except DependencyUnavailable as exc:
             # The cause type is logged, never the question or evidence text.
@@ -58,7 +63,11 @@ class FallbackAnswerGeneration(AnswerGenerationPort):
                 },
             )
         return await self._fallback.generate(
-            question, evidence, think=think, conversation_history=conversation_history
+            question,
+            evidence,
+            think=think,
+            conversation_history=conversation_history,
+            conversation_summary=conversation_summary,
         )
 
     async def healthcheck(self) -> bool:

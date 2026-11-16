@@ -1,8 +1,11 @@
 """Query orchestration and citation provenance checks."""
 
+import logging
 from collections.abc import Sequence
 from uuid import uuid4
 
+from app.conversation_memory import SlidingWindowManager
+from app.grounding import all_claims_supported, parse_grounded_answer
 from app.models import (
     Citation,
     ConversationTurn,
@@ -12,9 +15,19 @@ from app.models import (
     ResolvedEvidence,
     RetrievedPassage,
 )
-from app.ports import AnswerGenerationPort, RetrievalPort, SourceRecordPort
+from app.ports import (
+    AnswerGenerationPort,
+    AnswerSupportPort,
+    RetrievalPort,
+    SourceRecordPort,
+    UnconfiguredAnswerSupport,
+)
 
 DEFAULT_MAX_CONTEXT_CHARS = 80_000
+DEFAULT_CONVERSATION_CONTEXT_TOKENS = 12_000
+DEFAULT_CONVERSATION_OUTPUT_RESERVE_TOKENS = 2_048
+DEFAULT_CONVERSATION_MAX_MESSAGES = 12
+logger = logging.getLogger(__name__)
 
 
 class QueryOrchestrator:
@@ -24,13 +37,23 @@ class QueryOrchestrator:
         source_records: SourceRecordPort,
         answer_generation: AnswerGenerationPort,
         max_context_chars: int = DEFAULT_MAX_CONTEXT_CHARS,
+        max_context_tokens: int = DEFAULT_CONVERSATION_CONTEXT_TOKENS,
+        output_reserve_tokens: int = DEFAULT_CONVERSATION_OUTPUT_RESERVE_TOKENS,
+        max_conversation_messages: int = DEFAULT_CONVERSATION_MAX_MESSAGES,
+        answer_support: AnswerSupportPort | None = None,
     ) -> None:
         if max_context_chars < 1_000:
             raise ValueError("max_context_chars must be at least 1000.")
         self._retrieval = retrieval
         self._source_records = source_records
         self._answer_generation = answer_generation
+        self._answer_support = answer_support or UnconfiguredAnswerSupport()
         self._max_context_chars = max_context_chars
+        self._conversation_window = SlidingWindowManager(
+            max_messages=max_conversation_messages,
+            max_context_tokens=max_context_tokens,
+            output_reserve_tokens=output_reserve_tokens,
+        )
 
     async def answer(
         self,
@@ -40,6 +63,7 @@ class QueryOrchestrator:
         retrieval_question: str | None = None,
         think: bool = False,
         conversation_history: Sequence[ConversationTurn] = (),
+        conversation_summary: str = "",
     ) -> QueryResponse:
         request_id = request_id or str(uuid4())
         candidates = await self._retrieval.retrieve(
@@ -64,22 +88,41 @@ class QueryOrchestrator:
         passages_by_id = {
             item.evidence_id: passage for item, passage in zip(evidence, usable, strict=True)
         }
+        context = self._conversation_window.build(
+            conversation_summary,
+            conversation_history,
+            question=request.question,
+            evidence=[passage.text for passage in usable],
+        )
+        evidence = [
+            item.model_copy(update={"text": context.evidence_texts[index]})
+            for index, item in enumerate(evidence[: len(context.evidence_texts)])
+        ]
+        if not evidence:
+            return self._insufficient(request_id, "Evidence exceeded the model context budget.")
+        passages_by_id = {
+            item.evidence_id: passage for item, passage in zip(evidence, usable, strict=True)
+        }
         generated = await self._answer_generation.generate(
             request.question,
             evidence,
             think=think,
-            conversation_history=conversation_history,
+            conversation_history=context.recent_turns,
+            conversation_summary=context.summary,
         )
         if not generated.answer.strip():
             return self._insufficient(request_id, "The answer generator returned no answer text.")
-        cited_ids = list(dict.fromkeys(generated.evidence_ids))
-        proposed_ids = [item for item in cited_ids if item in passages_by_id]
-
-        if not proposed_ids:
+        parsed = parse_grounded_answer(
+            generated.answer,
+            generated.evidence_ids,
+            set(passages_by_id),
+        )
+        if parsed is None:
             return self._insufficient(
                 request_id,
-                "The generated answer did not cite any supplied evidence.",
+                "Every answer sentence must cite supplied evidence.",
             )
+        proposed_ids = list(parsed.evidence_ids)
 
         resolved_records = await self._source_records.resolve_many(
             [passages_by_id[item] for item in proposed_ids]
@@ -110,18 +153,38 @@ class QueryOrchestrator:
             )
 
         valid_ids = {citation.citation_id for citation in citations}
-        has_invalid_reference = any(item not in passages_by_id for item in generated.evidence_ids)
-        has_unverified_reference = any(item not in valid_ids for item in proposed_ids)
-        if has_invalid_reference or has_unverified_reference:
+        if set(proposed_ids) != valid_ids:
             return self._insufficient(
                 request_id,
                 "One or more cited passages could not be verified; "
                 "the generated answer was withheld.",
             )
+
+        # Validate only the exact passage text shown to the answer model. The
+        # separate source-record comparison above proves that text came from the
+        # canonical source; using the full record here could validate unseen text.
+        model_evidence = {item.evidence_id: item.text for item in evidence}
+        cited_evidence = {evidence_id: model_evidence[evidence_id] for evidence_id in proposed_ids}
+        try:
+            support_results = await self._answer_support.validate(parsed.claims, cited_evidence)
+        except Exception as exc:
+            logger.warning(
+                "answer_support.validation_unavailable",
+                extra={"exception_type": type(exc).__name__},
+            )
+            return self._insufficient(
+                request_id,
+                "The answer could not be checked against its cited passages.",
+            )
+        if not all_claims_supported(support_results, len(parsed.claims)):
+            return self._insufficient(
+                request_id,
+                "One or more answer sentences were not supported by their cited passages.",
+            )
         return QueryResponse(
             request_id=request_id,
             status="answered",
-            answer=generated.answer.strip(),
+            answer=parsed.rendered_answer,
             citations=citations,
         )
 

@@ -13,6 +13,11 @@ class Settings:
     cors_origins: tuple[str, ...] = ()
     max_context_chars: int = 80_000
     request_timeout_seconds: float = 60.0
+    conversation_context_token_budget: int = 12_000
+    conversation_output_reserve_tokens: int = 2_048
+    conversation_max_messages: int = 12
+    conversation_summary_max_chars: int = 4_000
+    conversation_summary_batch_turns: int = 24
     trusted_proxy_hops: int = 0
     database_url: str | None = None
     redis_url: str | None = None
@@ -127,6 +132,19 @@ class Settings:
             )
             max_request_body_bytes = int(os.getenv("MAX_REQUEST_BODY_BYTES", "1048576"))
             chat_retention_days = int(os.getenv("CHAT_RETENTION_DAYS", "365"))
+            conversation_context_token_budget = int(
+                os.getenv("CONVERSATION_CONTEXT_TOKEN_BUDGET", "12000")
+            )
+            conversation_output_reserve_tokens = int(
+                os.getenv("CONVERSATION_OUTPUT_RESERVE_TOKENS", "2048")
+            )
+            conversation_max_messages = int(os.getenv("CONVERSATION_MAX_MESSAGES", "12"))
+            conversation_summary_max_chars = int(
+                os.getenv("CONVERSATION_SUMMARY_MAX_CHARS", "4000")
+            )
+            conversation_summary_batch_turns = int(
+                os.getenv("CONVERSATION_SUMMARY_BATCH_TURNS", "24")
+            )
         except ValueError as exc:
             raise ValueError("Security limit and retention settings must be integers.") from exc
         if not 1 <= auth_identity_rate_limit_requests <= 100:
@@ -139,6 +157,16 @@ class Settings:
             raise ValueError("MAX_REQUEST_BODY_BYTES must be between 1024 and 16777216.")
         if not 1 <= chat_retention_days <= 3650:
             raise ValueError("CHAT_RETENTION_DAYS must be between 1 and 3650.")
+        if not 2_048 <= conversation_context_token_budget <= 100_000:
+            raise ValueError("CONVERSATION_CONTEXT_TOKEN_BUDGET must be between 2048 and 100000.")
+        if not 0 <= conversation_output_reserve_tokens < conversation_context_token_budget:
+            raise ValueError("CONVERSATION_OUTPUT_RESERVE_TOKENS must be below the context budget.")
+        if not 2 <= conversation_max_messages <= 100 or conversation_max_messages % 2:
+            raise ValueError("CONVERSATION_MAX_MESSAGES must be an even number from 2 to 100.")
+        if not 256 <= conversation_summary_max_chars <= 16_000:
+            raise ValueError("CONVERSATION_SUMMARY_MAX_CHARS must be between 256 and 16000.")
+        if not 1 <= conversation_summary_batch_turns <= 200:
+            raise ValueError("CONVERSATION_SUMMARY_BATCH_TURNS must be between 1 and 200.")
 
         database_url = os.getenv("DATABASE_URL") or None
         redis_url = os.getenv("REDIS_URL") or None
@@ -189,12 +217,12 @@ class Settings:
         google_cloud_project = os.getenv("GOOGLE_CLOUD_PROJECT") or None
         google_cloud_location = os.getenv("GOOGLE_CLOUD_LOCATION") or None
         vertex_model_id = os.getenv("VERTEX_MODEL_ID") or None
-        answer_generation_provider = os.getenv(
-            "ANSWER_GENERATION_PROVIDER", "vertex"
-        ).strip().lower()
-        answer_generation_fallback = os.getenv(
-            "ANSWER_GENERATION_FALLBACK", "groq"
-        ).strip().lower() or "none"
+        answer_generation_provider = (
+            os.getenv("ANSWER_GENERATION_PROVIDER", "vertex").strip().lower()
+        )
+        answer_generation_fallback = (
+            os.getenv("ANSWER_GENERATION_FALLBACK", "groq").strip().lower() or "none"
+        )
         gemini_api_key = os.getenv("GEMINI_API_KEY") or None
         groq_api_key = os.getenv("GROQ_API_KEY") or None
         groq_model_id = os.getenv("GROQ_MODEL_ID", "openai/gpt-oss-120b").strip()
@@ -264,6 +292,11 @@ class Settings:
             cors_origins=origins,
             max_context_chars=max_context_chars,
             request_timeout_seconds=request_timeout_seconds,
+            conversation_context_token_budget=conversation_context_token_budget,
+            conversation_output_reserve_tokens=conversation_output_reserve_tokens,
+            conversation_max_messages=conversation_max_messages,
+            conversation_summary_max_chars=conversation_summary_max_chars,
+            conversation_summary_batch_turns=conversation_summary_batch_turns,
             trusted_proxy_hops=trusted_proxy_hops,
             database_url=database_url,
             redis_url=redis_url,

@@ -1,8 +1,9 @@
 """Technology-neutral interfaces owned by adjacent system components."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 
+from app.grounding import AnswerClaim
 from app.models import (
     ConversationTurn,
     EvidenceInput,
@@ -25,6 +26,14 @@ class SourceRecordPort(Protocol):
     ) -> Sequence[ResolvedEvidence]: ...
 
 
+class AnswerSupportPort(Protocol):
+    async def validate(
+        self,
+        claims: Sequence[AnswerClaim],
+        evidence: Mapping[str, str],
+    ) -> Sequence[bool]: ...
+
+
 class AnswerGenerationPort(Protocol):
     async def generate(
         self,
@@ -33,6 +42,7 @@ class AnswerGenerationPort(Protocol):
         *,
         think: bool = False,
         conversation_history: Sequence[ConversationTurn] = (),
+        conversation_summary: str = "",
     ) -> GeneratedAnswer: ...
 
 
@@ -70,6 +80,16 @@ class UnconfiguredSourceRecords:
         raise AdapterNotConfigured("Source-record adapter is not configured")
 
 
+class UnconfiguredAnswerSupport:
+    async def validate(
+        self,
+        claims: Sequence[AnswerClaim],
+        evidence: Mapping[str, str],
+    ) -> Sequence[bool]:
+        del claims, evidence
+        raise AdapterNotConfigured("Answer-support validation is not configured")
+
+
 class UnconfiguredAnswerGeneration:
     async def generate(
         self,
@@ -78,5 +98,6 @@ class UnconfiguredAnswerGeneration:
         *,
         think: bool = False,
         conversation_history: Sequence[ConversationTurn] = (),
+        conversation_summary: str = "",
     ) -> GeneratedAnswer:
         raise AdapterNotConfigured("Answer-generation adapter is not configured")

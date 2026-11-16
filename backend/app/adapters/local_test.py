@@ -13,12 +13,12 @@ class LocalTestAnswerGeneration:
         *,
         think: bool = False,
         conversation_history: Sequence[ConversationTurn] = (),
+        conversation_summary: str = "",
     ) -> GeneratedAnswer:
-        del question, think, conversation_history
+        del question, think, conversation_history, conversation_summary
         if not evidence:
             return GeneratedAnswer(answer="", evidence_ids=[])
-        excerpt = " ".join(evidence[0].text.split())[:800]
         return GeneratedAnswer(
-            answer=f"Local test mode: retrieved passage: “{excerpt}” [1]",
+            answer="Local test mode returned the first retrieved passage. [1]",
             evidence_ids=[evidence[0].evidence_id],
         )

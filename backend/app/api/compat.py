@@ -14,9 +14,10 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.auth_service import ADMIN_SESSION_HOURS, SESSION_DAYS, InvalidMfaSecret
+from app.conversation_manager import ConversationMemoryState
 from app.models import ConversationTurn, QueryFilters, QueryOptions, QueryRequest
 from app.ports import (
     AdapterNotConfigured,
@@ -562,6 +563,28 @@ async def chat_query(
             status_code=503, detail="Persistent chat history requires an app session."
         )
     conversation_id = payload.conversation_id or uuid4()
+    idempotency_key = request.headers.get("Idempotency-Key")
+    idempotency_key_hash = None
+    idempotency_fingerprint = None
+    if idempotency_key is not None:
+        if not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", idempotency_key):
+            raise HTTPException(status_code=400, detail="Invalid Idempotency-Key header.")
+        idempotency_key_hash = hashlib.sha256(idempotency_key.encode("ascii")).hexdigest()
+        idempotency_fingerprint = hashlib.sha256(
+            json.dumps(
+                payload.model_dump(mode="json", by_alias=True),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        cached = await _load_idempotent_response(request, user, idempotency_key_hash)
+        if cached is not None:
+            if cached["fingerprint"] != idempotency_fingerprint:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key was already used for a different request.",
+                )
+            return cached["response"]
     if payload.conversation_id is not None:
         engine = getattr(request.app.state, "database_engine", None)
         if engine is None:
@@ -599,11 +622,16 @@ async def chat_query(
         filters=payload.filters,
         options=QueryOptions(max_sources=payload.max_sources),
     )
-    conversation_history = (
-        await _load_conversation_history(request, user, conversation_id)
-        if payload.conversation_id is not None
-        else []
-    )
+    manager = getattr(request.app.state, "conversation_manager", None)
+    if manager is not None:
+        memory_state, conversation_history = await manager.prepare(user.user_id, conversation_id)
+    else:
+        memory_state = ConversationMemoryState()
+        conversation_history = (
+            await _load_conversation_history(request, user, conversation_id)
+            if payload.conversation_id is not None
+            else []
+        )
     retrieval_query = _retrieval_query(
         payload.question,
         conversation_history,
@@ -618,6 +646,7 @@ async def chat_query(
                 retrieval_question=retrieval_query,
                 think=payload.think,
                 conversation_history=conversation_history,
+                conversation_summary=memory_state.summary,
             )
     except FilterError as exc:
         await _persist_failed_chat_attempt(
@@ -699,7 +728,22 @@ async def chat_query(
             answer,
             sources,
             started,
+            memory_state,
+            idempotency_key_hash,
+            idempotency_fingerprint,
+            response.limitations,
         )
+    except IntegrityError as exc:
+        if idempotency_key_hash and idempotency_fingerprint:
+            cached = await _load_idempotent_response(request, user, idempotency_key_hash)
+            if cached is not None and cached["fingerprint"] == idempotency_fingerprint:
+                return cached["response"]
+            if cached is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key was already used for a different request.",
+                ) from exc
+        raise
     except SQLAlchemyError as exc:
         # The frontend must not show an answer that was not saved to its history.
         raise HTTPException(
@@ -735,7 +779,7 @@ async def _load_conversation_history(
                    WHERE user_uuid = :user_id
                      AND response_text IS NOT NULL
                      AND metadata->>'conversation_id' = :conversation_id
-                   ORDER BY created_at DESC LIMIT :limit"""
+                   ORDER BY created_at DESC, query_run_uuid DESC LIMIT :limit"""
                         ),
                         {
                             "user_id": UUID(user.user_id),
@@ -865,9 +909,7 @@ def _retrieval_query(
             (turn.text for turn in reversed(history) if turn.role == "user"), None
         )
         retrieval_base = (
-            f"{previous_question} {question}"[:10_000]
-            if previous_question
-            else question[:10_000]
+            f"{previous_question} {question}"[:10_000] if previous_question else question[:10_000]
         )
 
     # ChatQuery validates each hint and limits the list to 20 items and 200
@@ -887,6 +929,10 @@ async def _persist_chat_turn(
     answer: str,
     sources: list[dict[str, Any]],
     started: datetime,
+    memory_state: ConversationMemoryState | None = None,
+    idempotency_key_hash: str | None = None,
+    idempotency_fingerprint: str | None = None,
+    limitations: list[str] | None = None,
 ) -> None:
     engine = getattr(request.app.state, "database_engine", None)
     if engine is None or not user.user_id or not user.session_id:
@@ -895,6 +941,35 @@ async def _persist_chat_turn(
         )
     elapsed = max(0, int((datetime.now(UTC) - started).total_seconds() * 1000))
     async with engine.begin() as connection:
+        # A summary can be prepared concurrently with another request. Read the
+        # newest owner-scoped state while writing so a stale request cannot roll
+        # back a newer summary version.
+        latest_memory = await connection.execute(
+            text(
+                """SELECT metadata->'conversation_memory' AS memory
+                   FROM query_runs
+                   WHERE user_uuid = :user_id AND request_type = 'CHAT'
+                     AND response_text IS NOT NULL
+                     AND metadata->>'conversation_id' = :conversation_id
+                     AND metadata ? 'conversation_memory'
+                   ORDER BY created_at DESC, query_run_uuid DESC
+                   LIMIT 1 FOR UPDATE"""
+            ),
+            {"user_id": UUID(user.user_id), "conversation_id": str(conversation_id)},
+        )
+        latest_row = latest_memory.mappings().first()
+        persisted_state = ConversationMemoryState.from_json(
+            latest_row["memory"] if latest_row else None
+        )
+        if memory_state is not None and memory_state.version >= persisted_state.version:
+            persisted_state = memory_state
+        metadata: dict[str, Any] = {"conversation_id": str(conversation_id)}
+        if persisted_state.summary:
+            metadata["conversation_memory"] = persisted_state.to_json()
+        if idempotency_key_hash and idempotency_fingerprint:
+            metadata["idempotency_key_hash"] = idempotency_key_hash
+            metadata["idempotency_fingerprint"] = idempotency_fingerprint
+            metadata["limitations"] = limitations or []
         await connection.execute(
             text(
                 """INSERT INTO query_runs (
@@ -912,12 +987,47 @@ async def _persist_chat_turn(
                 "question": question,
                 "answer": answer,
                 "sources": json.dumps(sources),
-                "metadata": json.dumps({"conversation_id": str(conversation_id)}),
+                "metadata": json.dumps(metadata),
                 "status": "COMPLETED",
                 "latency": elapsed,
                 "model": request.app.state.settings.groq_model_id,
             },
         )
+
+
+async def _load_idempotent_response(
+    request: Request, user: AuthenticatedUser, key_hash: str
+) -> dict[str, Any] | None:
+    engine = getattr(request.app.state, "database_engine", None)
+    if engine is None or not user.user_id:
+        return None
+    async with engine.connect() as connection:
+        row = (
+            await connection.execute(
+                text(
+                    """SELECT query_text, response_text, retrieved_chunks, status, metadata
+                       FROM query_runs
+                       WHERE user_uuid = :user_id AND request_type = 'CHAT'
+                         AND response_text IS NOT NULL
+                         AND metadata->>'idempotency_key_hash' = :key_hash
+                       LIMIT 1"""
+                ),
+                {"user_id": UUID(user.user_id), "key_hash": key_hash},
+            )
+        ).mappings().first()
+    if row is None:
+        return None
+    metadata = row["metadata"] or {}
+    return {
+        "fingerprint": metadata.get("idempotency_fingerprint"),
+        "response": {
+            "conversationId": metadata.get("conversation_id"),
+            "answer": row["response_text"],
+            "sources": row["retrieved_chunks"] or [],
+            "status": row["status"],
+            "limitations": metadata.get("limitations", []),
+        },
+    }
 
 
 @router.get("/chat/conversations")

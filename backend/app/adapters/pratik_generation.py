@@ -4,7 +4,8 @@ import asyncio
 import logging
 from collections.abc import Sequence
 
-from app.models import ConversationTurn, EvidenceInput, GeneratedAnswer as BackendAnswer
+from app.models import ConversationTurn, EvidenceInput
+from app.models import GeneratedAnswer as BackendAnswer
 from app.ports import AnswerGenerationPort, DependencyRateLimited, DependencyUnavailable
 from app.retrieval.generator import AnswerGenerator
 from app.retrieval.llm import GroqChat
@@ -39,6 +40,7 @@ class PratikAnswerGenerationAdapter(AnswerGenerationPort):
         *,
         think: bool = False,
         conversation_history: Sequence[ConversationTurn] = (),
+        conversation_summary: str = "",
     ) -> BackendAnswer:
         passages = [
             {
@@ -58,6 +60,7 @@ class PratikAnswerGenerationAdapter(AnswerGenerationPort):
                 conversation_history=[
                     {"role": turn.role, "text": turn.text} for turn in conversation_history
                 ],
+                conversation_summary=conversation_summary,
                 think=think,
             )
         except DependencyRateLimited:
@@ -82,9 +85,7 @@ class PratikAnswerGenerationAdapter(AnswerGenerationPort):
         return BackendAnswer(
             answer=generated.answer,
             evidence_ids=[
-                evidence_by_rank[rank]
-                for rank in generated.cited_ranks
-                if rank in evidence_by_rank
+                evidence_by_rank[rank] for rank in generated.cited_ranks if rank in evidence_by_rank
             ],
         )
 

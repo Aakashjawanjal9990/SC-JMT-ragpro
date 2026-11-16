@@ -13,16 +13,25 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from app.adapters.conversation_summary import (
+    ConversationSummarizer,
+    LocalTestConversationSummarizer,
+)
 from app.adapters.fallback_generation import FallbackAnswerGeneration
 from app.adapters.local_test import LocalTestAnswerGeneration
 from app.adapters.postgres import PostgresQueryAdapter
 from app.adapters.pratik_generation import PratikAnswerGenerationAdapter
 from app.adapters.sqlite_sources import SqliteSourceRecordAdapter
+from app.adapters.support_validation import (
+    AnswerSupportValidator,
+    LocalTestAnswerSupportValidator,
+)
 from app.adapters.vertex import GeminiAnswerAdapter
 from app.api.compat import router as compat_router
 from app.api.errors import register_error_handlers
 from app.api.routes import router
 from app.auth_service import AuthService
+from app.conversation_manager import ConversationManager
 from app.email import SMTPEmailSender
 from app.logging_config import configure_logging
 from app.middleware import RequestBodyLimitMiddleware, RequestLoggingMiddleware
@@ -30,6 +39,7 @@ from app.models import QueryFilters, RetrievedPassage
 from app.orchestrator import QueryOrchestrator
 from app.ports import (
     AnswerGenerationPort,
+    AnswerSupportPort,
     RetrievalPort,
     SourceRecordPort,
     UnconfiguredAnswerGeneration,
@@ -112,6 +122,7 @@ def create_app(
     source_records: SourceRecordPort | None = None,
     answer_generation: AnswerGenerationPort | None = None,
     settings: Settings | None = None,
+    answer_support: AnswerSupportPort | None = None,
 ) -> FastAPI:
     """Build the API with owner-supplied adapters, or explicit unconfigured defaults."""
     resolved_settings = settings or Settings.from_environment()
@@ -142,11 +153,7 @@ def create_app(
         if resolved_settings.database_url
         else None
     )
-    postgres_adapter = (
-        PostgresQueryAdapter(database_engine)
-        if database_engine
-        else None
-    )
+    postgres_adapter = PostgresQueryAdapter(database_engine) if database_engine else None
     retrieval_settings = RetrievalSettings.from_environment()
     default_retrieval_adapter = (
         retrieval if retrieval is not None else postgres_adapter or UnconfiguredRetrieval()
@@ -173,6 +180,25 @@ def create_app(
             else _configured_answer_generation(resolved_settings)
         )
     )
+    local_test_mode = (
+        os.getenv("LOCAL_TEST_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
+        and resolved_settings.environment.lower() == "development"
+    )
+    conversation_summarizer = (
+        LocalTestConversationSummarizer()
+        if local_test_mode
+        else ConversationSummarizer(resolved_settings)
+    )
+    conversation_manager = (
+        ConversationManager(database_engine, conversation_summarizer, resolved_settings)
+        if database_engine is not None
+        else None
+    )
+    answer_support_validator = answer_support or (
+        LocalTestAnswerSupportValidator()
+        if local_test_mode
+        else AnswerSupportValidator(resolved_settings)
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -187,6 +213,11 @@ def create_app(
             (PratikAnswerGenerationAdapter, FallbackAnswerGeneration),
         ):
             await asyncio.to_thread(answer_generation_adapter.warmup)
+        if isinstance(conversation_summarizer, ConversationSummarizer):
+            await asyncio.to_thread(conversation_summarizer.warmup)
+        support_warmup = getattr(answer_support_validator, "warmup", None)
+        if support_warmup is not None:
+            await asyncio.to_thread(support_warmup)
         if retrieval is None and os.getenv(
             "RETRIEVAL_PORT_ADAPTER_ENABLED", "false"
         ).strip().lower() in {
@@ -304,6 +335,12 @@ def create_app(
                 (PratikAnswerGenerationAdapter, GeminiAnswerAdapter, FallbackAnswerGeneration),
             ):
                 await answer_generation_adapter.close()
+            await conversation_summarizer.close()
+            support_close = getattr(answer_support_validator, "close", None)
+            if support_close is not None:
+                result = support_close()
+                if inspect.isawaitable(result):
+                    await result
 
     application = FastAPI(
         title="Supreme Court Judgment Query API",
@@ -328,6 +365,7 @@ def create_app(
                 "Content-Type",
                 "X-CSRF-Token",
                 "X-Request-ID",
+                "Idempotency-Key",
             ],
             expose_headers=["X-Request-ID"],
         )
@@ -336,11 +374,16 @@ def create_app(
         source_records=source_records_adapter,
         answer_generation=answer_generation_adapter,
         max_context_chars=resolved_settings.max_context_chars,
+        max_context_tokens=resolved_settings.conversation_context_token_budget,
+        output_reserve_tokens=resolved_settings.conversation_output_reserve_tokens,
+        max_conversation_messages=resolved_settings.conversation_max_messages,
+        answer_support=answer_support_validator,
     )
     application.state.environment = resolved_settings.environment.lower()
     application.state.settings = resolved_settings
     application.state.retrieval_adapter = retrieval_slot
     application.state.database_engine = database_engine
+    application.state.conversation_manager = conversation_manager
     application.state.redis_client = redis_client
     application.state.auth_service = (
         AuthService(
@@ -427,6 +470,10 @@ def create_app(
         "answer_generation": lambda: adapter_is_ready(
             answer_generation_adapter,
             not isinstance(answer_generation_adapter, UnconfiguredAnswerGeneration),
+        ),
+        "answer_support": lambda: adapter_is_ready(
+            answer_support_validator,
+            bool(getattr(answer_support_validator, "configured", False)),
         ),
         "rate_limit_store": limiter_is_ready,
         "database": database_is_ready,
