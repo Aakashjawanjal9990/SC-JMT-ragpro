@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from '../lib/api';
+import { api, createIdempotencyKey } from '../lib/api';
 
 /** Chat state for the Home page: messages, sidebar history, sending. */
 export default function useChat() {
@@ -41,15 +41,35 @@ export default function useChat() {
   }, [loadConversations]);
 
   const send = useCallback(
-    async (question, { think = false } = {}) => {
+    async (question, { think = false, idempotencyKey: retryKey } = {}) => {
       const generation = requestGeneration.current;
+      let idempotencyKey = retryKey;
+
+      try {
+        idempotencyKey ||= createIdempotencyKey();
+      } catch (err) {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'user', text: question },
+          { role: 'assistant', text: err.message, error: true },
+        ]);
+        return;
+      }
 
       setBusy(true);
       setConversationError('');
-      setMessages((prev) => [...prev, { role: 'user', text: question }]);
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', text: question, idempotencyKey },
+      ]);
 
       try {
-        const res = await api.query(question, conversationId, think);
+        const res = await api.query(
+          question,
+          conversationId,
+          think,
+          idempotencyKey,
+        );
 
         if (generation !== requestGeneration.current) return;
 
@@ -78,6 +98,8 @@ export default function useChat() {
             role: 'assistant',
             text: res.answer,
             sources: res.sources,
+            status: res.status,
+            limitations: res.limitations,
           },
         ]);
       } catch (err) {

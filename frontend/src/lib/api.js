@@ -1,4 +1,4 @@
-const BASE = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+const BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/+$/, '');
 const TIMEOUT_MS = 60000;
 
 const CSRF_HEADER = 'X-CSRF-Token';
@@ -23,7 +23,7 @@ const PLAIN_401 = new Set([
   '/admin/logout',
 ]);
 
-if (!BASE && import.meta.env.DEV) {
+if (!BASE && import.meta.env?.DEV) {
   console.error('VITE_API_URL is not set. Copy .env.example to .env.');
 }
 
@@ -66,7 +66,7 @@ function errorMessage(data, status) {
   return text.trim().slice(0, 200) || GENERIC_ERROR;
 }
 
-async function request(path, { method = 'GET', body } = {}) {
+async function request(path, { method = 'GET', body, idempotencyKey } = {}) {
   const isAdmin = path.startsWith('/admin');
   const scope = isAdmin ? 'admin' : 'user';
   const token = SAFE_METHODS.has(method) ? '' : csrf[scope];
@@ -87,6 +87,7 @@ async function request(path, { method = 'GET', body } = {}) {
           'Content-Type': 'application/json',
         }),
         ...(token && { [CSRF_HEADER]: token }),
+        ...(idempotencyKey && { 'Idempotency-Key': idempotencyKey }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -138,7 +139,11 @@ const pageLabel = (pages) =>
     ? String(pages[0])
     : `${pages[0]}-${pages[pages.length - 1]}`;
 
-function normalizeQueryResponse(res) {
+export function normalizeQueryResponse(response) {
+  const res =
+    response && typeof response === 'object' && !Array.isArray(response)
+      ? response
+      : {};
   let sources = res.sources;
 
   if (!sources && Array.isArray(res.citations)) {
@@ -163,14 +168,41 @@ function normalizeQueryResponse(res) {
     }));
   }
 
+  const answer = typeof res.answer === 'string' ? res.answer.trim() : '';
+
   return {
+    ...res,
     conversationId: res.conversationId,
-    answer: res.answer?.trim() || NO_ANSWER,
+    answer: answer || (res.status === 'insufficient_evidence' ? '' : NO_ANSWER),
     sources: sources || [],
   };
 }
 
-async function queryWithInterpretation(question, conversationId, think) {
+export function createIdempotencyKey() {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === 'function') {
+    return cryptoApi.randomUUID();
+  }
+
+  if (typeof cryptoApi?.getRandomValues === 'function') {
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0'));
+    return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex
+      .slice(6, 8)
+      .join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10).join('')}`;
+  }
+
+  throw new Error('Secure random generation is unavailable in this browser.');
+}
+
+async function queryWithInterpretation(
+  question,
+  conversationId,
+  think,
+  idempotencyKey,
+) {
   let interpretation;
 
   try {
@@ -192,17 +224,21 @@ async function queryWithInterpretation(question, conversationId, think) {
     };
   }
 
-  const res = await post('/chat/query', {
-    question,
-    conversationId,
-    think,
-    normalizedQuery: interpretation?.normalizedQuery || question,
-    searchTerms: [
-      ...(interpretation?.keywords || []),
-      ...(interpretation?.alternatives || []),
-    ],
-    clarificationNeeded: false,
-    clarificationQuestion: '',
+  const res = await request('/chat/query', {
+    method: 'POST',
+    body: {
+      question,
+      conversationId,
+      think,
+      normalizedQuery: interpretation?.normalizedQuery || question,
+      searchTerms: [
+        ...(interpretation?.keywords || []),
+        ...(interpretation?.alternatives || []),
+      ],
+      clarificationNeeded: false,
+      clarificationQuestion: '',
+    },
+    idempotencyKey,
   });
 
   return normalizeQueryResponse(res);
@@ -235,8 +271,8 @@ export const api = {
   },
 
   // Chat
-  query: (question, conversationId, think = false) =>
-    queryWithInterpretation(question, conversationId, think),
+  query: (question, conversationId, think = false, idempotencyKey) =>
+    queryWithInterpretation(question, conversationId, think, idempotencyKey),
 
   conversations: (options = {}) =>
     options.archived
